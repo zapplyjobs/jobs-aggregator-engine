@@ -22,6 +22,29 @@ function isGitHubActions() {
   return process.env.GITHUB_ACTIONS === 'true';
 }
 
+function loadOracleDetailCacheIds() {
+  const ids = new Set();
+  const marker = /^(Responsibilities|Qualifications):/m;
+  try {
+    const files = fs.readdirSync(DATA_DIR)
+      .filter(f => f.startsWith('descriptions-oracle') && f.endsWith('.jsonl'));
+    for (const file of files) {
+      const lines = fs.readFileSync(path.join(DATA_DIR, file), 'utf8').trim().split('\n').filter(Boolean);
+      for (const line of lines) {
+        try {
+          const { id, description_text } = JSON.parse(line);
+          const text = description_text || '';
+          if (id && (text.length >= 500 || marker.test(text))) ids.add(id);
+        } catch {}
+      }
+    }
+  } catch {}
+  if (ids.size > 0) {
+    console.log(`  Oracle detail cache: ${ids.size} IDs with full descriptions`);
+  }
+  return ids;
+}
+
 async function uploadRequired(r2, name, file, contentType) {
   const uploaded = await r2.uploadRaw(name, fs.readFileSync(file, 'utf8'), contentType);
   if (!uploaded) {
@@ -37,8 +60,9 @@ async function main() {
   const companyList = JSON.parse(fs.readFileSync(COMPANY_LIST_PATH, 'utf8'));
   const oracleCompanies = companyList.oracle || [];
 
+  const oracleCachedIds = loadOracleDetailCacheIds();
   console.log(`🏛️ Supplemental Oracle lane: ${oracleCompanies.length} companies configured`);
-  const jobs = await fetchAllOracleJobs(oracleCompanies);
+  const jobs = await fetchAllOracleJobs(oracleCompanies, { cachedDescriptionIds: oracleCachedIds });
   const durationMs = Date.now() - start;
 
   const payload = jobs.map(job => ({

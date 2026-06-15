@@ -429,33 +429,35 @@ async function main() {
       if (microsoftCachedIds.size > 0) console.log(`  Microsoft description cache: ${microsoftCachedIds.size} IDs`);
     } catch (e) { /* no cache yet */ }
 
-    // AGG-FETCH-10: Load Google/Apple description cache from sidecar files.
+    // AGG-FETCH-10: Load description caches from sidecar files.
     // Same pattern as Microsoft — avoids re-fetching detail pages every run.
-    let googleCachedIds = new Set();
-    try {
-      const ggSidecarFiles = fs.readdirSync(DATA_DIR)
-        .filter(f => f.startsWith('descriptions-google') && f.endsWith('.jsonl'));
-      for (const fname of ggSidecarFiles) {
-        const lines = fs.readFileSync(path.join(DATA_DIR, fname), 'utf8').trim().split('\n').filter(Boolean);
-        for (const line of lines) {
-          try { const { id } = JSON.parse(line); if (id) googleCachedIds.add(id); } catch {}
+    // Oracle only treats full-detail sidecars as cached; short listing snippets must
+    // stay fetchable so responsibilities/qualifications can progressively land.
+    function loadDescriptionCacheIds(prefix, { minChars = 1, marker = null } = {}) {
+      const ids = new Set();
+      try {
+        const sidecarFiles = fs.readdirSync(DATA_DIR)
+          .filter(f => f.startsWith(prefix) && f.endsWith('.jsonl'));
+        for (const fname of sidecarFiles) {
+          const lines = fs.readFileSync(path.join(DATA_DIR, fname), 'utf8').trim().split('\n').filter(Boolean);
+          for (const line of lines) {
+            try {
+              const { id, description_text } = JSON.parse(line);
+              const text = description_text || '';
+              if (id && (text.length >= minChars || (marker && marker.test(text)))) ids.add(id);
+            } catch {}
+          }
         }
-      }
-      if (googleCachedIds.size > 0) console.log(`  Google description cache: ${googleCachedIds.size} IDs`);
-    } catch (e) { /* no cache yet */ }
+        if (ids.size > 0) {
+          console.log(`  ${prefix.replace('descriptions-', '')} description cache: ${ids.size} IDs${minChars > 1 ? ` (>=${minChars} chars or marker)` : ''}`);
+        }
+      } catch (e) { /* no cache yet */ }
+      return ids;
+    }
 
-    let appleCachedIds = new Set();
-    try {
-      const apSidecarFiles = fs.readdirSync(DATA_DIR)
-        .filter(f => f.startsWith('descriptions-apple') && f.endsWith('.jsonl'));
-      for (const fname of apSidecarFiles) {
-        const lines = fs.readFileSync(path.join(DATA_DIR, fname), 'utf8').trim().split('\n').filter(Boolean);
-        for (const line of lines) {
-          try { const { id } = JSON.parse(line); if (id) appleCachedIds.add(id); } catch {}
-        }
-      }
-      if (appleCachedIds.size > 0) console.log(`  Apple description cache: ${appleCachedIds.size} IDs`);
-    } catch (e) { /* no cache yet */ }
+    const googleCachedIds = loadDescriptionCacheIds('descriptions-google');
+    const appleCachedIds = loadDescriptionCacheIds('descriptions-apple');
+    const oracleCachedIds = loadDescriptionCacheIds('descriptions-oracle', { minChars: 500, marker: /^(Responsibilities|Qualifications):/m });
 
 
     // AGG-SPEED-2: Load WD totals cache from prior run
@@ -489,7 +491,7 @@ async function main() {
         : withTimeout(fetchAllMicrosoftJobs({ previousJobCount: prevMicrosoftCount, cachedDescriptionIds: microsoftCachedIds }), 600_000, 'Microsoft'),
       HOTPATH_DEMOTED_FETCHERS.has('Oracle')
         ? Promise.resolve([])
-        : withTimeout(fetchAllOracleJobs(JSON.parse(fs.readFileSync(COMPANY_LIST_PATH, 'utf8')).oracle || undefined), 600_000, 'Oracle'),
+        : withTimeout(fetchAllOracleJobs(JSON.parse(fs.readFileSync(COMPANY_LIST_PATH, 'utf8')).oracle || undefined, { cachedDescriptionIds: oracleCachedIds }), 600_000, 'Oracle'),
       withTimeout(fetchAllAmdJobs(), 120_000, 'AMD'),
       HOTPATH_DEMOTED_FETCHERS.has('TikTok')
         ? Promise.resolve([])

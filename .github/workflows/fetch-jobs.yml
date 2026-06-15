@@ -2,10 +2,6 @@ name: Fetch All Jobs
 
 on:
   workflow_dispatch:  # Triggered by job-board-cron-worker (Cloudflare) every 15 min
-  push:
-    branches: [ main ]
-    paths:
-      - '.github/scripts/**'
 
 # Prevent concurrent runs
 concurrency:
@@ -697,6 +693,7 @@ jobs:
             'filtered-samples.jsonl',
             'tag-history.jsonl',
           ];
+          const requiredFiles = new Set(files);
 
           // Add description sidecars
           const sidecars = fs.readdirSync(dataDir).filter(f => f.startsWith('descriptions-') && f.endsWith('.jsonl'));
@@ -704,19 +701,29 @@ jobs:
 
           // AGG-SPEED-9: Upload in parallel with concurrency 5
           const CONCURRENCY = 5;
-          let ok = 0, fail = 0;
+          let ok = 0, fail = 0, required_files_failed = 0;
+
+          function markFailure(file, message) {
+            fail++;
+            if (requiredFiles.has(file)) required_files_failed++;
+            console.error(message);
+          }
 
           async function uploadFile(file) {
             const fp = path.join(dataDir, file);
-            if (!fs.existsSync(fp)) { console.log('SKIP: ' + file); return; }
+            if (!fs.existsSync(fp)) {
+              if (requiredFiles.has(file)) markFailure(file, 'MISSING REQUIRED: ' + file);
+              else console.log('SKIP: ' + file);
+              return;
+            }
             try {
               const data = fs.readFileSync(fp, 'utf8');
               const isJson = file.endsWith('.json');
               const uploaded = isJson
                 ? await r2.uploadRaw(file, data, 'application/json')
                 : await r2.uploadRaw(file, data, 'application/x-jsonlines');
-              if (uploaded) { ok++; } else { fail++; }
-            } catch (e) { console.error('ERR: ' + file + ' - ' + e.message); fail++; }
+              if (uploaded) { ok++; } else { markFailure(file, 'ERR: ' + file + ' upload returned false'); }
+            } catch (e) { markFailure(file, 'ERR: ' + file + ' - ' + e.message); }
           }
 
           for (let i = 0; i < files.length; i += CONCURRENCY) {
@@ -724,8 +731,12 @@ jobs:
             await Promise.all(batch.map(f => uploadFile(f)));
           }
 
-          await r2.writeManifest({ files_uploaded: ok, files_failed: fail, pipeline_run: process.env.GITHUB_RUN_ID });
+          await r2.writeManifest({ files_uploaded: ok, files_failed: fail, required_files_failed, pipeline_run: process.env.GITHUB_RUN_ID });
           console.log('R2 upload done: ' + ok + ' ok, ' + fail + ' failed');
+          console.log('Required R2 upload failures: ' + required_files_failed);
+          if (required_files_failed > 0) {
+            throw new Error('Required R2 upload failures: ' + required_files_failed);
+          }
         }
         main().catch(e => { console.error('R2 fatal: ' + e.message); process.exit(1); });
         "
