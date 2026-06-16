@@ -42,6 +42,23 @@ jobs:
 
       - name: Create data directory
         run: mkdir -p .github/data
+      - name: Seed descriptions-oracle.jsonl from R2
+        run: |
+          node -e "
+          const { createR2Client } = require('./.github/scripts/aggregator/lib/storage/r2-client');
+          async function main() {
+            const r2 = createR2Client({ prefix: 'data/' });
+            const result = await r2.downloadToFile('descriptions-oracle.jsonl', '.github/data/descriptions-oracle.jsonl');
+            if (result) { console.log('R2_OK'); } else { process.exit(1); }
+          }
+          main().catch(() => process.exit(1));
+          " && echo "✅ Seeded Oracle cache" || echo "⚠️ No Oracle cache yet"
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+
 
       - name: Fetch Oracle supplemental lane
         run: node .github/scripts/fetch-supplemental-oracle.js
