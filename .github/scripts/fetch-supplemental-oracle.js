@@ -22,9 +22,14 @@ function isGitHubActions() {
   return process.env.GITHUB_ACTIONS === 'true';
 }
 
-function loadOracleDetailCacheIds() {
-  const ids = new Set();
-  const marker = /^(Responsibilities|Qualifications):/m;
+function looksLikeRichOracleDescription(text) {
+  if (!text || typeof text !== 'string') return false;
+  return /^(Responsibilities|Qualifications):/m.test(text) || text.length >= 2000;
+}
+
+function loadOracleDetailCache() {
+  const cachedIds = new Set();
+  const priorityIds = new Set();
   try {
     const files = fs.readdirSync(DATA_DIR)
       .filter(f => f.startsWith('descriptions-oracle') && f.endsWith('.jsonl'));
@@ -33,16 +38,17 @@ function loadOracleDetailCacheIds() {
       for (const line of lines) {
         try {
           const { id, description_text } = JSON.parse(line);
-          const text = description_text || '';
-          if (id && (marker.test(text) || text.length >= 2000)) ids.add(id);
+          if (!id || !description_text) continue;
+          if (looksLikeRichOracleDescription(description_text)) cachedIds.add(id);
+          else priorityIds.add(id);
         } catch {}
       }
     }
   } catch {}
-  if (ids.size > 0) {
-    console.log(`  Oracle detail cache: ${ids.size} IDs with full descriptions`);
+  if (cachedIds.size > 0 || priorityIds.size > 0) {
+    console.log(`  Oracle detail cache: ${cachedIds.size} rich IDs, ${priorityIds.size} short sidecar IDs prioritized`);
   }
-  return ids;
+  return { cachedIds, priorityIds };
 }
 
 async function uploadRequired(r2, name, file, contentType) {
@@ -60,9 +66,12 @@ async function main() {
   const companyList = JSON.parse(fs.readFileSync(COMPANY_LIST_PATH, 'utf8'));
   const oracleCompanies = companyList.oracle || [];
 
-  const oracleCachedIds = loadOracleDetailCacheIds();
+  const oracleCache = loadOracleDetailCache();
   console.log(`🏛️ Supplemental Oracle lane: ${oracleCompanies.length} companies configured`);
-  const jobs = await fetchAllOracleJobs(oracleCompanies, { cachedDescriptionIds: oracleCachedIds });
+  const jobs = await fetchAllOracleJobs(oracleCompanies, {
+    cachedDescriptionIds: oracleCache.cachedIds,
+    priorityDescriptionIds: oracleCache.priorityIds,
+  });
   const durationMs = Date.now() - start;
 
   const payload = jobs.map(job => ({

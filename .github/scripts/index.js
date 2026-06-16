@@ -433,8 +433,9 @@ async function main() {
     // Same pattern as Microsoft — avoids re-fetching detail pages every run.
     // Oracle only treats rich sidecars as cached; short listing snippets must
     // stay fetchable so responsibilities/qualifications can progressively land.
-    function loadDescriptionCacheIds(prefix, { minChars = 1, marker = null } = {}) {
-      const ids = new Set();
+    function loadDescriptionCacheState(prefix, { minChars = 1, marker = null, trackShort = false } = {}) {
+      const cachedIds = new Set();
+      const priorityIds = new Set();
       try {
         const sidecarFiles = fs.readdirSync(DATA_DIR)
           .filter(f => f.startsWith(prefix) && f.endsWith('.jsonl'));
@@ -444,20 +445,25 @@ async function main() {
             try {
               const { id, description_text } = JSON.parse(line);
               const text = description_text || '';
-              if (id && (text.length >= minChars || (marker && marker.test(text)))) ids.add(id);
+              const rich = text.length >= minChars || (marker && marker.test(text));
+              if (id && rich) cachedIds.add(id);
+              else if (id && trackShort && text) priorityIds.add(id);
             } catch {}
           }
         }
-        if (ids.size > 0) {
-          console.log(`  ${prefix.replace('descriptions-', '')} description cache: ${ids.size} IDs${minChars > 1 ? ` (>=${minChars} chars or marker)` : ''}`);
+        if (cachedIds.size > 0 || priorityIds.size > 0) {
+          const source = prefix.replace('descriptions-', '');
+          const cacheLabel = minChars > 1 ? `rich IDs (>=${minChars} chars or marker)` : 'IDs';
+          const priorityLabel = priorityIds.size > 0 ? `, ${priorityIds.size} short sidecar IDs prioritized` : '';
+          console.log(`  ${source} description cache: ${cachedIds.size} ${cacheLabel}${priorityLabel}`);
         }
       } catch (e) { /* no cache yet */ }
-      return ids;
+      return { cachedIds, priorityIds };
     }
 
-    const googleCachedIds = loadDescriptionCacheIds('descriptions-google');
-    const appleCachedIds = loadDescriptionCacheIds('descriptions-apple');
-    const oracleCachedIds = loadDescriptionCacheIds('descriptions-oracle', { minChars: 2000, marker: /^(Responsibilities|Qualifications):/m });
+    const googleCachedIds = loadDescriptionCacheState('descriptions-google').cachedIds;
+    const appleCachedIds = loadDescriptionCacheState('descriptions-apple').cachedIds;
+    const oracleCache = loadDescriptionCacheState('descriptions-oracle', { minChars: 2000, marker: /^(Responsibilities|Qualifications):/m, trackShort: true });
 
 
     // AGG-SPEED-2: Load WD totals cache from prior run
@@ -491,7 +497,7 @@ async function main() {
         : withTimeout(fetchAllMicrosoftJobs({ previousJobCount: prevMicrosoftCount, cachedDescriptionIds: microsoftCachedIds }), 600_000, 'Microsoft'),
       HOTPATH_DEMOTED_FETCHERS.has('Oracle')
         ? Promise.resolve([])
-        : withTimeout(fetchAllOracleJobs(JSON.parse(fs.readFileSync(COMPANY_LIST_PATH, 'utf8')).oracle || undefined, { cachedDescriptionIds: oracleCachedIds }), 600_000, 'Oracle'),
+        : withTimeout(fetchAllOracleJobs(JSON.parse(fs.readFileSync(COMPANY_LIST_PATH, 'utf8')).oracle || undefined, { cachedDescriptionIds: oracleCache.cachedIds, priorityDescriptionIds: oracleCache.priorityIds }), 600_000, 'Oracle'),
       withTimeout(fetchAllAmdJobs(), 120_000, 'AMD'),
       HOTPATH_DEMOTED_FETCHERS.has('TikTok')
         ? Promise.resolve([])
