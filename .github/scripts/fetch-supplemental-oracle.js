@@ -34,7 +34,7 @@ function loadOracleDetailCacheIds() {
         try {
           const { id, description_text } = JSON.parse(line);
           const text = description_text || '';
-          if (id && (text.length >= 500 || marker.test(text))) ids.add(id);
+          if (id && (marker.test(text) || text.length >= 2000)) ids.add(id);
         } catch {}
       }
     }

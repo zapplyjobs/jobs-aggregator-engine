@@ -431,7 +431,7 @@ async function main() {
 
     // AGG-FETCH-10: Load description caches from sidecar files.
     // Same pattern as Microsoft — avoids re-fetching detail pages every run.
-    // Oracle only treats full-detail sidecars as cached; short listing snippets must
+    // Oracle only treats rich sidecars as cached; short listing snippets must
     // stay fetchable so responsibilities/qualifications can progressively land.
     function loadDescriptionCacheIds(prefix, { minChars = 1, marker = null } = {}) {
       const ids = new Set();
@@ -457,7 +457,7 @@ async function main() {
 
     const googleCachedIds = loadDescriptionCacheIds('descriptions-google');
     const appleCachedIds = loadDescriptionCacheIds('descriptions-apple');
-    const oracleCachedIds = loadDescriptionCacheIds('descriptions-oracle', { minChars: 500, marker: /^(Responsibilities|Qualifications):/m });
+    const oracleCachedIds = loadDescriptionCacheIds('descriptions-oracle', { minChars: 2000, marker: /^(Responsibilities|Qualifications):/m });
 
 
     // AGG-SPEED-2: Load WD totals cache from prior run
