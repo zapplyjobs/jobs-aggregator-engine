@@ -154,16 +154,14 @@ jobs:
               NEW_COMMIT=$(echo "$COMMIT_INPUT" | gh api "repos/$REPO/git/commits" --method POST --input - --jq '.sha' 2>/dev/null) || { sleep 5; continue; }
 
               REF_INPUT=$(printf '{"sha":"%s","force":false}' "$NEW_COMMIT")
-              UPDATE_RESULT=$(echo "$REF_INPUT" | gh api "repos/$REPO/git/refs/heads/main" --method PATCH --input - --jq '.object.sha' 2>/dev/null)
-
-              if [ $? -eq 0 ] && [ -n "$UPDATE_RESULT" ]; then
+              if UPDATE_RESULT=$(echo "$REF_INPUT" | gh api "repos/$REPO/git/refs/heads/main" --method PATCH --input - --jq '.object.sha' 2>/dev/null) && [ -n "$UPDATE_RESULT" ]; then
                 echo "  PASS: $REPO_NAME -> ${UPDATE_RESULT:0:12}"
                 RESULTS="${RESULTS}PASS: ${REPO_NAME}\n"
                 PASS=$((PASS + 1))
                 SUCCESS=true
                 break
               else
-                echo "  [$ATTEMPT/3] $REPO_NAME: Non-fast-forward, retrying..."
+                echo "  [$ATTEMPT/3] $REPO_NAME: ref update failed, retrying..."
                 sleep 5
               fi
             done
