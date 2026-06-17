@@ -182,6 +182,26 @@ jobs:
       - name: Re-enable dangerous workflows
         if: always()
         run: |
+          REENABLE_FAIL=0
+
+          verify_active() {
+            local repo="$1"
+            local workflow_id="$2"
+            local label="$3"
+            local state
+            state=$(gh api "repos/zapplyjobs/$repo/actions/workflows/$workflow_id" --jq '.state' 2>/dev/null || echo "FETCH_ERROR")
+            if [ "$state" = "active" ]; then
+              echo "Verified active: $label"
+              echo "- $label: active" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error::$label state=$state after re-enable"
+              echo "- $label: $state" >> "$GITHUB_STEP_SUMMARY"
+              REENABLE_FAIL=$((REENABLE_FAIL + 1))
+            fi
+          }
+
+          echo "### Workflow re-enable verification" >> "$GITHUB_STEP_SUMMARY"
+
           gh api repos/zapplyjobs/jobs-aggregator-private/actions/workflows/234555372/enable --method PUT --silent && echo "Enabled: aggregator/Fetch All Jobs" || true
           gh api repos/zapplyjobs/jobs-data-2026/actions/workflows/239692001/enable --method PUT --silent && echo "Enabled: jobs-data/Enrich Jobs" || true
           declare -A CONSUMER_WORKFLOWS=(
@@ -196,6 +216,17 @@ jobs:
             WF_ID="${CONSUMER_WORKFLOWS[$REPO]}"
             gh api "repos/zapplyjobs/$REPO/actions/workflows/$WF_ID/enable" --method PUT --silent && echo "Enabled: $REPO/Update Jobs" || true
           done
+
+          verify_active "jobs-aggregator-private" "234555372" "aggregator/Fetch All Jobs"
+          verify_active "jobs-data-2026" "239692001" "jobs-data/Enrich Jobs"
+          for REPO in "${!CONSUMER_WORKFLOWS[@]}"; do
+            verify_active "$REPO" "${CONSUMER_WORKFLOWS[$REPO]}" "$REPO/Update Jobs"
+          done
+
+          if [ "$REENABLE_FAIL" -gt 0 ]; then
+            echo "::error::$REENABLE_FAIL workflow(s) were not active after re-enable"
+            exit 1
+          fi
 
       - name: Verify alignment
         run: |
