@@ -69,7 +69,7 @@ async function main() {
 
   const [google, microsoft, tiktok] = await Promise.all([
     fetchAllGoogleJobs({ cachedDescriptionIds: googleCachedIds, dataDir: DATA_DIR }),
-    fetchAllMicrosoftJobs({ cachedDescriptionIds: microsoftCachedIds }),
+    fetchAllMicrosoftJobs({ cachedDescriptionIds: microsoftCachedIds, fetchDetailsOnInitial: true }),
     fetchAllTiktokJobs(),
   ]);
 
