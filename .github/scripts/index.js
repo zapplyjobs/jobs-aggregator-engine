@@ -70,6 +70,7 @@ loadCompanyOverrides();
 // Paths
 const DATA_DIR = path.join(process.cwd(), '.github', 'data');
 const JOBS_OUTPUT_FILE = path.join(DATA_DIR, 'all_jobs.json');
+const US_JOBS_OUTPUT_FILE = path.join(DATA_DIR, 'us_jobs.json');
 const METADATA_OUTPUT_FILE = path.join(DATA_DIR, 'jobs-metadata.json');
 
 // Command line args
@@ -84,6 +85,14 @@ const isVerbose = args.includes('--verbose');
 function appendAll(target, items) {
   if (!Array.isArray(items) || items.length === 0) return;
   for (const item of items) target.push(item);
+}
+
+function isUsSnapshotJob(job) {
+  return job?.tags?.locations?.includes('us') === true;
+}
+
+function buildUsSnapshotJobs(jobs) {
+  return jobs.filter(isUsSnapshotJob);
 }
 
 /**
@@ -909,6 +918,10 @@ async function main() {
     // Write jobs (JSONL format)
     await writeJobsJSONL(publicJobs, JOBS_OUTPUT_FILE);
 
+    const usJobs = buildUsSnapshotJobs(publicJobs);
+    await writeJobsJSONL(usJobs, US_JOBS_OUTPUT_FILE);
+    console.log(`🇺🇸 AGG-US-SNAPSHOT-1: Wrote ${usJobs.length} US-tagged jobs to us_jobs.json`);
+
     // Write metadata
     // Use publicJobs (full 7-day rolling window) for pool-level stats (by_source, top_companies, freshness).
     // sortedJobs is current-run only — stats must use publicJobs (full 7-day window).
@@ -1604,6 +1617,7 @@ async function gitCommit(jobCount) {
 
     // Add output files
     execSync('git add .github/data/all_jobs.json');
+    execSync('git add .github/data/us_jobs.json');
     execSync('git add .github/data/jobs-metadata.json');
     execSync('git add .github/data/dedupe-store.json');
     execSync('git add .github/data/wd-totals-cache.json 2>/dev/null || true'); // AGG-SPEED-2: WD incremental fetch cache
@@ -1645,4 +1659,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { main, mergeCarryForward, RETIRED_CARRY_FORWARD_SOURCES, normalizeSupplementalJobForMerge };
+module.exports = { main, mergeCarryForward, RETIRED_CARRY_FORWARD_SOURCES, normalizeSupplementalJobForMerge, buildUsSnapshotJobs };
