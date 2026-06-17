@@ -156,6 +156,22 @@ const SUPPLEMENTAL_LANE_FILES = [
   },
 ];
 
+function normalizeSupplementalJobForMerge(job, laneMeta) {
+  if (!job || typeof job !== 'object') return null;
+  const source = typeof job.source === 'string' ? job.source.toLowerCase() : null;
+  if (!source) return null;
+
+  const normalized = { ...job, source };
+  if (!normalized.posted_at && laneMeta?.generated_at) {
+    const generatedTs = new Date(laneMeta.generated_at).getTime();
+    if (!Number.isNaN(generatedTs)) {
+      normalized.posted_at = laneMeta.generated_at;
+      normalized.posted_at_basis = 'supplemental_generated_at';
+    }
+  }
+  return normalized;
+}
+
 function loadSupplementalInputs() {
   const jobs = [];
   const inputs = {};
@@ -168,12 +184,12 @@ function loadSupplementalInputs() {
       if (!Array.isArray(laneJobs)) continue;
       const bySource = {};
       for (const job of laneJobs) {
-        if (!job || typeof job !== 'object') continue;
-        const source = typeof job.source === 'string' ? job.source.toLowerCase() : null;
-        if (!source) continue;
+        const normalized = normalizeSupplementalJobForMerge(job, laneMeta);
+        if (!normalized) continue;
+        const source = normalized.source;
         sourcesUsed.add(source);
         bySource[source] = (bySource[source] || 0) + 1;
-        jobs.push(job);
+        jobs.push(normalized);
       }
       inputs[lane.lane] = {
         generated_at: laneMeta.generated_at || null,
@@ -1629,4 +1645,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { main, mergeCarryForward, RETIRED_CARRY_FORWARD_SOURCES };
+module.exports = { main, mergeCarryForward, RETIRED_CARRY_FORWARD_SOURCES, normalizeSupplementalJobForMerge };
