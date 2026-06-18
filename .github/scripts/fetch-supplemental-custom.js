@@ -11,10 +11,26 @@ if (!fs.existsSync(SHARED)) {
 const { fetchAllGoogleJobs } = require(`${SHARED}/fetchers/google`);
 const { fetchAllMicrosoftJobs } = require(`${SHARED}/fetchers/microsoft`);
 const { fetchAllTiktokJobs } = require(`${SHARED}/fetchers/tiktok`);
+const { fetchAllIcimsJobs } = require(`${SHARED}/fetchers/icims`);
 
 const DATA_DIR = path.join(process.cwd(), '.github', 'data');
 const JOBS_FILE = path.join(DATA_DIR, 'supplemental-custom-jobs.json');
 const META_FILE = path.join(DATA_DIR, 'supplemental-custom-metadata.json');
+
+
+const ICIMS_TENANTS = [
+  { host: 'careers-sig.icims.com', companyName: 'Susquehanna International Group, LLP', companySlug: 'sig' },
+  { host: 'careers-axway.icims.com', companyName: 'Axway', companySlug: 'axway' },
+  { host: 'jobs-cesi.icims.com', companyName: 'Cole Engineering Services', companySlug: 'cesi' },
+];
+
+const ICIMS_OPTIONS = {
+  maxPages: 15,
+  maxRowsPerTenant: 300,
+  staleDetails: [
+    { url: 'https://americas-cookmedical.icims.com/jobs/17536/intern%2c-artificial-intelligence-%26-innovation/job' },
+  ],
+};
 
 function countJsonlLines(file) {
   try {
@@ -67,13 +83,15 @@ async function main() {
   const googleCacheBefore = countJsonlLines(googleSidecarPath);
   const microsoftCacheBefore = countJsonlLines(microsoftSidecarPath);
 
-  const [google, microsoft, tiktok] = await Promise.all([
+  const [google, microsoft, tiktok, icimsResult] = await Promise.all([
     fetchAllGoogleJobs({ cachedDescriptionIds: googleCachedIds, dataDir: DATA_DIR }),
     fetchAllMicrosoftJobs({ cachedDescriptionIds: microsoftCachedIds, fetchDetailsOnInitial: true }),
     fetchAllTiktokJobs(),
+    fetchAllIcimsJobs(ICIMS_TENANTS, ICIMS_OPTIONS),
   ]);
 
-  const groups = { google, microsoft, tiktok };
+  const icims = icimsResult.jobs;
+  const groups = { google, microsoft, tiktok, icims };
   const payload = Object.entries(groups).flatMap(([source, jobs]) =>
     jobs.map(job => ({
       id: job.id,
@@ -103,11 +121,11 @@ async function main() {
       expected_cadence_minutes: 15,
       max_staleness_minutes: 90,
     },
-    source: 'custom',
     sources: {
       google: google.length,
       microsoft: microsoft.length,
       tiktok: tiktok.length,
+      icims: icims.length,
     },
     jobs_fetched: payload.length,
     duration_ms: durationMs,
@@ -118,6 +136,10 @@ async function main() {
       microsoft_ids_before: microsoftCachedIds.size,
       microsoft_lines_before: microsoftCacheBefore,
       microsoft_lines_after: microsoftCacheAfter,
+    },
+
+    probe_stats: {
+      icims: icimsResult.stats,
     },
   };
 
