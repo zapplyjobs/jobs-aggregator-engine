@@ -102,7 +102,8 @@ jobs:
           assert contract.get('included_in_main_all_jobs') is False
           assert contract.get('merge_mode') == 'separate_artifact'
           assert contract.get('visibility') == 'snapshot_only'
-          assert set(meta.get('sources', {}).keys()) == {'google','microsoft','tiktok','icims'}
+          assert set(meta.get('sources', {}).keys()) == {'google','microsoft','tiktok','bytedance','icims'}
+          assert meta['sources']['bytedance'] > 0
           assert meta['sources']['icims'] > 0
           print('jobs', len(jobs))
           print('sources', meta['sources'])
