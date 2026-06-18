@@ -42,17 +42,22 @@ jobs:
 
       - name: Create data directory
         run: mkdir -p .github/data
-      - name: Seed descriptions-oracle.jsonl from R2
+      - name: Seed Oracle cache and board snapshot from R2
         run: |
           node -e "
           const { createR2Client } = require('./.github/scripts/aggregator/lib/storage/r2-client');
+          const fs = require('fs');
+          async function downloadMaybe(r2, key, file) {
+            const result = await r2.downloadToFile(key, file);
+            console.log((result ? 'R2_OK' : 'R2_MISS') + ' ' + key);
+          }
           async function main() {
             const r2 = createR2Client({ prefix: 'data/' });
-            const result = await r2.downloadToFile('descriptions-oracle.jsonl', '.github/data/descriptions-oracle.jsonl');
-            if (result) { console.log('R2_OK'); } else { process.exit(1); }
+            await downloadMaybe(r2, 'descriptions-oracle.jsonl', '.github/data/descriptions-oracle.jsonl');
+            await downloadMaybe(r2, 'us_jobs.json', '.github/data/us_jobs.json');
           }
           main().catch(() => process.exit(1));
-          " && echo "✅ Seeded Oracle cache" || echo "⚠️ No Oracle cache yet"
+          " && echo "✅ Seeded Oracle cache/snapshot" || echo "⚠️ Oracle R2 seed incomplete"
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}

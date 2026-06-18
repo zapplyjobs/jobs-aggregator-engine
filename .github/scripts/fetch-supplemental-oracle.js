@@ -13,6 +13,7 @@ const DATA_DIR = path.join(process.cwd(), '.github', 'data');
 const COMPANY_LIST_PATH = path.join(SHARED, 'fetchers', 'company-list.json');
 const JOBS_FILE = path.join(DATA_DIR, 'supplemental-oracle-jobs.json');
 const META_FILE = path.join(DATA_DIR, 'supplemental-oracle-metadata.json');
+const PREV_US_JOBS_FILE = path.join(DATA_DIR, 'us_jobs.json');
 const PREV_ALL_JOBS_FILE = path.join(DATA_DIR, 'all_jobs.json');
 const TECH_DOMAINS = new Set(['software', 'data_science', 'hardware', 'ai']);
 
@@ -75,11 +76,17 @@ function loadOracleDetailCache() {
   return { cachedIds, priorityIds };
 }
 
-function loadCurrentBoardPriorityIds(cachedIds, existingPriorityIds, allJobsPath = PREV_ALL_JOBS_FILE) {
+function resolveBoardJobsPath() {
+  if (fs.existsSync(PREV_US_JOBS_FILE)) return PREV_US_JOBS_FILE;
+  if (fs.existsSync(PREV_ALL_JOBS_FILE)) return PREV_ALL_JOBS_FILE;
+  return null;
+}
+
+function loadCurrentBoardPriorityIds(cachedIds, existingPriorityIds, boardJobsPath = resolveBoardJobsPath()) {
   const priorityIds = new Set(existingPriorityIds);
-  if (!fs.existsSync(allJobsPath)) return priorityIds;
+  if (!boardJobsPath || !fs.existsSync(boardJobsPath)) return priorityIds;
   try {
-    const rows = parseJsonOrNdjson(fs.readFileSync(allJobsPath, 'utf8'));
+    const rows = parseJsonOrNdjson(fs.readFileSync(boardJobsPath, 'utf8'));
     for (const job of rows) {
       if (!isCurrentUsTechOracle(job)) continue;
       if (cachedIds.has(job.id)) continue;
@@ -87,7 +94,8 @@ function loadCurrentBoardPriorityIds(cachedIds, existingPriorityIds, allJobsPath
     }
   } catch {}
   if (priorityIds.size > existingPriorityIds.size) {
-    console.log(`  Oracle board priority IDs: +${priorityIds.size - existingPriorityIds.size} current US tech rows from previous all_jobs.json`);
+    const sourceLabel = path.basename(boardJobsPath);
+    console.log(`  Oracle board priority IDs: +${priorityIds.size - existingPriorityIds.size} current US tech rows from ${sourceLabel}`);
   }
   return priorityIds;
 }
@@ -182,4 +190,5 @@ module.exports = {
   parseJsonOrNdjson,
   isCurrentUsTechOracle,
   loadCurrentBoardPriorityIds,
+  resolveBoardJobsPath,
 };
