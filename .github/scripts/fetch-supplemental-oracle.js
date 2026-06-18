@@ -54,7 +54,7 @@ function isCurrentUsTechOracle(job) {
 
 function loadOracleDetailCache() {
   const cachedIds = new Set();
-  const priorityIds = new Set();
+  let shortSidecarIds = 0;
   try {
     const files = fs.readdirSync(DATA_DIR)
       .filter(f => f.startsWith('descriptions-oracle') && f.endsWith('.jsonl'));
@@ -65,15 +65,13 @@ function loadOracleDetailCache() {
           const { id, description_text } = JSON.parse(line);
           if (!id || !description_text) continue;
           if (looksLikeRichOracleDescription(description_text)) cachedIds.add(id);
-          else priorityIds.add(id);
+          else shortSidecarIds++;
         } catch {}
       }
     }
   } catch {}
-  if (cachedIds.size > 0 || priorityIds.size > 0) {
-    console.log(`  Oracle detail cache: ${cachedIds.size} rich IDs, ${priorityIds.size} short sidecar IDs prioritized`);
-  }
-  return { cachedIds, priorityIds };
+  console.log(`  Oracle detail cache: ${cachedIds.size} rich IDs, ${shortSidecarIds} short sidecar IDs ignored for priority`);
+  return { cachedIds, priorityIds: new Set() };
 }
 
 function resolveBoardJobsPath() {
