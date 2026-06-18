@@ -95,6 +95,20 @@ function buildUsSnapshotJobs(jobs) {
   return jobs.filter(isUsSnapshotJob);
 }
 
+
+function activePublicWindowTs(job, now = Date.now()) {
+  const rawPostedAt = job?.posted_at ? new Date(job.posted_at).getTime() : now;
+  const postedTs = Number.isNaN(rawPostedAt) ? now : Math.min(rawPostedAt, now);
+  if (job?.source === 'greenhouse' && job?.tags?.employment === 'internship' && job?.source_updated_at) {
+    const rawUpdatedAt = new Date(job.source_updated_at).getTime();
+    if (!Number.isNaN(rawUpdatedAt)) {
+      const updatedTs = Math.min(rawUpdatedAt, now);
+      if (updatedTs > postedTs) return updatedTs;
+    }
+  }
+  return postedTs;
+}
+
 /**
  * AGG-32: Filter stale jobs by posted_at TTL.
  * AGG-6 date overwrite disabled A86 — jobs keep their source-reported posted_at.
@@ -106,7 +120,7 @@ function resolvePostedAt(publicJobs, prevLines) {
   const filtered = publicJobs.filter(job => {
     if (!job.posted_at) { staleRemoved++; return false; }
     const jobTtlMs = job.tags?.employment === 'internship' ? INTERNSHIP_TTL_MS : DEDUPE_TTL_MS;
-    if (new Date(job.posted_at).getTime() < Date.now() - jobTtlMs) { staleRemoved++; return false; }
+    if (activePublicWindowTs(job) < Date.now() - jobTtlMs) { staleRemoved++; return false; }
     return true;
   });
 
@@ -969,7 +983,7 @@ async function main() {
     // Strip pipeline internals before writing public output file
     // (source_url, source_id, _raw are internal — not needed downstream)
     // Note: 'source' is kept for downstream observability (which ATS produced each job)
-    const STRIP_FIELDS = ['source_url', '_raw', 'description', 'source_updated_at', 'enriched', 'enriched_at', 'is_internship', 'is_new_grad', 'is_us_only', 'remote'];
+    const STRIP_FIELDS = ['source_url', '_raw', 'description', 'enriched', 'enriched_at', 'is_internship', 'is_new_grad', 'is_us_only', 'remote'];
     let publicJobs = sortedJobs.map(job => {
       const stripped = { ...job };
       for (const field of STRIP_FIELDS) {
@@ -990,6 +1004,10 @@ async function main() {
       resolvePostedAt(publicJobs, prevLines);
 
       mergeCarryForward(publicJobs, prevLines, currentIds, currentFingerprints, STRIP_FIELDS, successfulSources, atsResult.health || {});
+    }
+
+    for (const job of publicJobs) {
+      delete job.source_updated_at;
     }
 
     // Generate tag stats from full pool (post-merge + post-AGG-32 filter).
@@ -1858,4 +1876,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { main, mergeCarryForward, RETIRED_CARRY_FORWARD_SOURCES, normalizeSupplementalJobForMerge, summarizeSupplementalLaneForMerge, buildDescriptionDeliverySummary, buildUsSnapshotJobs };
+module.exports = { main, mergeCarryForward, RETIRED_CARRY_FORWARD_SOURCES, normalizeSupplementalJobForMerge, summarizeSupplementalLaneForMerge, buildDescriptionDeliverySummary, buildUsSnapshotJobs, activePublicWindowTs };
