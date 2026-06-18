@@ -52,6 +52,26 @@ assert.ok(RETIRED_CARRY_FORWARD_SOURCES.has('jsearch'), 'jsearch must be retired
   assert.strictEqual(publicJobs.length, 1, 'active non-fetched sources still carry forward within TTL');
 }
 
+{
+  const publicJobs = [];
+  mergeCarryForward(
+    publicJobs,
+    [line({
+      id: 'greenhouse-point72-7586061002',
+      source: 'greenhouse',
+      title: 'Quantitative Researcher Intern',
+      company_name: 'Point72',
+      posted_at: '2024-08-15T17:34:49-04:00',
+      tags: { employment: 'internship', domains: ['software'], locations: ['us'] },
+    })],
+    new Set(),
+    new Set(),
+    [],
+    new Set(['greenhouse'])
+  );
+  assert.strictEqual(publicJobs.length, 0, 'current-run missing greenhouse jobs must not carry forward when greenhouse fetched successfully');
+}
+
 
 {
   const publicJobs = [];
