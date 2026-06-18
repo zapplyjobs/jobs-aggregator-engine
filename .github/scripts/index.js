@@ -34,6 +34,8 @@ const { fetchAllOracleJobs } = require(`${SHARED}/fetchers/oracle`);
 const { fetchAllAmdJobs } = require(`${SHARED}/fetchers/amd`);
 const { fetchAllTiktokJobs } = require(`${SHARED}/fetchers/tiktok`);
 const { applyFamilyCache, buildFamilyCache } = require(`${SHARED}/fetchers/workday`);
+const { fetchSRDescriptions } = require(`${SHARED}/fetchers/smartrecruiters-descriptions`);
+
 
 // Import processors
 const { validateAndNormalizeJobs, printValidationSummary, normalizeJob } = require(`${SHARED}/processors/validator`);
@@ -90,6 +92,21 @@ function appendAll(target, items) {
 function isUsSnapshotJob(job) {
   return job?.tags?.locations?.includes('us') === true;
 }
+function injectDescriptions(jobs, descriptionMap, source) {
+  let injected = 0;
+  for (const job of jobs) {
+    if (job.description) continue;
+    const text = descriptionMap.get(job.id);
+    if (!text) continue;
+    job.description = text;
+    injected++;
+  }
+  if (injected > 0) {
+    console.log(`📄 ${source} descriptions: injected ${injected} descriptions into current jobs`);
+  }
+  return injected;
+}
+
 
 function buildUsSnapshotJobs(jobs) {
   return jobs.filter(isUsSnapshotJob);
@@ -741,7 +758,15 @@ async function main() {
     } else {
       console.log('📄 Step 1b: No WD jobs this run — skipping description fetch');
     }
+    const srJobs = allJobs.filter(j => j.source === 'smartrecruiters');
+    if (srJobs.length > 0) {
+      const srDescriptions = await fetchSRDescriptions(srJobs, DATA_DIR);
+      injectDescriptions(srJobs, srDescriptions, 'SR');
+    } else {
+      console.log('📄 SR descriptions: No SmartRecruiters jobs this run — skipping description fetch');
+    }
     console.log('');
+
 
     // Step 2: Enhance jobs (add fingerprints, employment_types arrays, etc.)
     console.log('🔄 Step 2: Enhancing jobs with required fields...');
@@ -1876,4 +1901,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { main, mergeCarryForward, RETIRED_CARRY_FORWARD_SOURCES, normalizeSupplementalJobForMerge, summarizeSupplementalLaneForMerge, buildDescriptionDeliverySummary, buildUsSnapshotJobs, activePublicWindowTs };
+module.exports = { main, mergeCarryForward, RETIRED_CARRY_FORWARD_SOURCES, normalizeSupplementalJobForMerge, summarizeSupplementalLaneForMerge, buildDescriptionDeliverySummary, buildUsSnapshotJobs, activePublicWindowTs, injectDescriptions };
