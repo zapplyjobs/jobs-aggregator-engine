@@ -17,7 +17,6 @@ const DATA_DIR = path.join(process.cwd(), '.github', 'data');
 const JOBS_FILE = path.join(DATA_DIR, 'supplemental-custom-jobs.json');
 const META_FILE = path.join(DATA_DIR, 'supplemental-custom-metadata.json');
 
-
 const ICIMS_TENANTS = [
   { host: 'careers-sig.icims.com', companyName: 'Susquehanna International Group, LLP', companySlug: 'sig' },
   { host: 'careers-axway.icims.com', companyName: 'Axway', companySlug: 'axway' },
@@ -57,7 +56,6 @@ async function uploadRequired(r2, name, file, contentType) {
   }
 }
 
-
 async function loadIds(prefix) {
   const ids = new Set();
   try {
@@ -72,12 +70,22 @@ async function loadIds(prefix) {
   return ids;
 }
 
+function writeSidecar(filePath, jobs) {
+  const rows = jobs
+    .filter(job => job.id && job.description && String(job.description).trim().length > 0)
+    .map(job => JSON.stringify({ id: job.id, description_text: job.description }));
+  if (rows.length === 0) return 0;
+  fs.writeFileSync(filePath, rows.join('\n') + '\n', 'utf8');
+  return rows.length;
+}
+
 async function main() {
   const start = Date.now();
   fs.mkdirSync(DATA_DIR, { recursive: true });
 
   const googleSidecarPath = path.join(DATA_DIR, 'descriptions-google.jsonl');
   const microsoftSidecarPath = path.join(DATA_DIR, 'descriptions-microsoft.jsonl');
+  const icimsSidecarPath = path.join(DATA_DIR, 'descriptions-icims.jsonl');
   const googleCachedIds = await loadIds('descriptions-google');
   const microsoftCachedIds = await loadIds('descriptions-microsoft');
   const googleCacheBefore = countJsonlLines(googleSidecarPath);
@@ -107,6 +115,7 @@ async function main() {
 
   const googleCacheAfter = countJsonlLines(googleSidecarPath);
   const microsoftCacheAfter = countJsonlLines(microsoftSidecarPath);
+  const icimsSidecarRows = writeSidecar(icimsSidecarPath, icims);
 
   const durationMs = Date.now() - start;
   const metadata = {
@@ -137,6 +146,7 @@ async function main() {
       microsoft_ids_before: microsoftCachedIds.size,
       microsoft_lines_before: microsoftCacheBefore,
       microsoft_lines_after: microsoftCacheAfter,
+      icims_lines_after: icimsSidecarRows,
     },
 
     probe_stats: {
@@ -154,9 +164,11 @@ async function main() {
       const r2 = createR2Client({ prefix: 'data/' });
       await uploadRequired(r2, 'supplemental-custom-jobs.json', JOBS_FILE, 'application/json');
       await uploadRequired(r2, 'supplemental-custom-metadata.json', META_FILE, 'application/json');
-      const googleSidecar = path.join(DATA_DIR, 'descriptions-google.jsonl');
-      if (fs.existsSync(googleSidecar)) {
-        await uploadRequired(r2, 'descriptions-google.jsonl', googleSidecar, 'application/x-jsonlines');
+      if (fs.existsSync(googleSidecarPath)) {
+        await uploadRequired(r2, 'descriptions-google.jsonl', googleSidecarPath, 'application/x-jsonlines');
+      }
+      if (fs.existsSync(icimsSidecarPath)) {
+        await uploadRequired(r2, 'descriptions-icims.jsonl', icimsSidecarPath, 'application/x-jsonlines');
       }
       console.log('☁️ Uploaded custom supplemental artifacts to R2');
     } catch (err) {
@@ -172,7 +184,11 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  console.error('❌ Supplemental custom lane failed:', err.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(err => {
+    console.error('❌ Supplemental custom lane failed:', err.message);
+    process.exit(1);
+  });
+}
+
+module.exports = { writeSidecar };
