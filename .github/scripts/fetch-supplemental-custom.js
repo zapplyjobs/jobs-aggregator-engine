@@ -11,6 +11,7 @@ if (!fs.existsSync(SHARED)) {
 const { fetchAllGoogleJobs } = require(`${SHARED}/fetchers/google`);
 const { fetchAllMicrosoftJobs } = require(`${SHARED}/fetchers/microsoft`);
 const { fetchAllTiktokJobs } = require(`${SHARED}/fetchers/tiktok`);
+const { fetchAllByteDanceJobs } = require(`${SHARED}/fetchers/bytedance`);
 const { fetchAllIcimsJobs } = require(`${SHARED}/fetchers/icims`);
 
 const DATA_DIR = path.join(process.cwd(), '.github', 'data');
@@ -86,20 +87,22 @@ async function main() {
   const googleSidecarPath = path.join(DATA_DIR, 'descriptions-google.jsonl');
   const microsoftSidecarPath = path.join(DATA_DIR, 'descriptions-microsoft.jsonl');
   const icimsSidecarPath = path.join(DATA_DIR, 'descriptions-icims.jsonl');
+  const bytedanceSidecarPath = path.join(DATA_DIR, 'descriptions-bytedance.jsonl');
   const googleCachedIds = await loadIds('descriptions-google');
   const microsoftCachedIds = await loadIds('descriptions-microsoft');
   const googleCacheBefore = countJsonlLines(googleSidecarPath);
   const microsoftCacheBefore = countJsonlLines(microsoftSidecarPath);
 
-  const [google, microsoft, tiktok, icimsResult] = await Promise.all([
+  const [google, microsoft, tiktok, bytedance, icimsResult] = await Promise.all([
     fetchAllGoogleJobs({ cachedDescriptionIds: googleCachedIds, dataDir: DATA_DIR }),
     fetchAllMicrosoftJobs({ cachedDescriptionIds: microsoftCachedIds, fetchDetailsOnInitial: true }),
     fetchAllTiktokJobs(),
+    fetchAllByteDanceJobs(),
     fetchAllIcimsJobs(ICIMS_TENANTS, ICIMS_OPTIONS),
   ]);
 
   const icims = icimsResult.jobs;
-  const groups = { google, microsoft, tiktok, icims };
+  const groups = { google, microsoft, tiktok, bytedance, icims };
   const payload = Object.entries(groups).flatMap(([source, jobs]) =>
     jobs.map(job => ({
       id: job.id,
@@ -116,6 +119,7 @@ async function main() {
   const googleCacheAfter = countJsonlLines(googleSidecarPath);
   const microsoftCacheAfter = countJsonlLines(microsoftSidecarPath);
   const icimsSidecarRows = writeSidecar(icimsSidecarPath, icims);
+  const bytedanceSidecarRows = writeSidecar(bytedanceSidecarPath, bytedance);
 
   const durationMs = Date.now() - start;
   const metadata = {
@@ -135,6 +139,7 @@ async function main() {
       google: google.length,
       microsoft: microsoft.length,
       tiktok: tiktok.length,
+      bytedance: bytedance.length,
       icims: icims.length,
     },
     jobs_fetched: payload.length,
@@ -147,6 +152,7 @@ async function main() {
       microsoft_lines_before: microsoftCacheBefore,
       microsoft_lines_after: microsoftCacheAfter,
       icims_lines_after: icimsSidecarRows,
+      bytedance_lines_after: bytedanceSidecarRows,
     },
 
     probe_stats: {
