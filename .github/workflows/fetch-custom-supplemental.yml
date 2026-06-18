@@ -102,9 +102,11 @@ jobs:
           assert contract.get('included_in_main_all_jobs') is False
           assert contract.get('merge_mode') == 'separate_artifact'
           assert contract.get('visibility') == 'snapshot_only'
-          assert set(meta.get('sources', {}).keys()) == {'google','microsoft','tiktok'}
+          assert set(meta.get('sources', {}).keys()) == {'google','microsoft','tiktok','icims'}
+          assert meta['sources']['icims'] > 0
           print('jobs', len(jobs))
           print('sources', meta['sources'])
+          print('icims_probe', meta.get('probe_stats', {}).get('icims'))
           PY
 
       - name: Display custom supplemental summary
