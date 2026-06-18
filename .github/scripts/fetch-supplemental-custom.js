@@ -121,6 +121,7 @@ async function main() {
       expected_cadence_minutes: 15,
       max_staleness_minutes: 90,
     },
+    source: 'custom',
     sources: {
       google: google.length,
       microsoft: microsoft.length,
