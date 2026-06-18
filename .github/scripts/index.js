@@ -1350,6 +1350,87 @@ function buildSourceVisibilitySummary(jobs) {
   };
 }
 
+function buildDescriptionDeliverySummary(jobs, dataDir) {
+  const excludedSources = new Set(['enriched', 'workday', 'smartrecruiters']);
+  const sidecarRows = {};
+  const sidecarNonempty = {};
+  const sidecarIds = new Map();
+
+  try {
+    const files = fs.readdirSync(dataDir)
+      .filter(f => /^descriptions-.+\.jsonl$/.test(f))
+      .filter(f => !f.startsWith('descriptions-enriched'))
+      .filter(f => !f.startsWith('descriptions-workday'))
+      .filter(f => !f.startsWith('descriptions-smartrecruiters'));
+    for (const fname of files) {
+      const source = fname.replace(/^descriptions-/, '').replace(/-\d+\.jsonl$/, '').replace(/\.jsonl$/, '').toLowerCase();
+      sidecarRows[source] = sidecarRows[source] || 0;
+      sidecarNonempty[source] = sidecarNonempty[source] || 0;
+      if (!sidecarIds.has(source)) sidecarIds.set(source, new Set());
+      const lines = fs.readFileSync(path.join(dataDir, fname), 'utf8').trim().split('\n').filter(Boolean);
+      for (const line of lines) {
+        sidecarRows[source]++;
+        try {
+          const row = JSON.parse(line);
+          if (typeof row.description_text === 'string' && row.description_text.trim()) sidecarNonempty[source]++;
+          if (row.id) sidecarIds.get(source).add(row.id);
+        } catch {
+          // malformed rows still count toward file size but not toward matches/nonempty text
+        }
+      }
+    }
+  } catch {
+    // Missing sidecar files are reflected as zero coverage below.
+  }
+
+  const finalRows = {};
+  const finalInlineDescriptions = {};
+  const finalRowsWithSidecarMatch = {};
+  for (const job of jobs || []) {
+    const source = (job.source || 'unknown').toLowerCase();
+    if (excludedSources.has(source)) continue;
+    finalRows[source] = (finalRows[source] || 0) + 1;
+    if (typeof job.description === 'string' && job.description.trim()) {
+      finalInlineDescriptions[source] = (finalInlineDescriptions[source] || 0) + 1;
+    }
+    if (sidecarIds.get(source)?.has(job.id)) {
+      finalRowsWithSidecarMatch[source] = (finalRowsWithSidecarMatch[source] || 0) + 1;
+    }
+  }
+
+  const summary = {};
+  const sources = new Set([
+    ...Object.keys(sidecarRows),
+    ...Object.keys(finalRows),
+  ]);
+  for (const source of [...sources].sort()) {
+    const finalPool = finalRows[source] || 0;
+    const matched = finalRowsWithSidecarMatch[source] || 0;
+    const sidecars = sidecarRows[source] || 0;
+    let mode = 'none_visible';
+    if (finalPool === 0) mode = 'no_final_rows';
+    else if (matched === finalPool && finalPool > 0) mode = 'sidecar_only';
+    else if (matched > 0) mode = 'partial_sidecar_coverage';
+    else if ((finalInlineDescriptions[source] || 0) > 0) mode = 'inline_only';
+    summary[source] = {
+      final_rows: finalPool,
+      final_inline_description_rows: finalInlineDescriptions[source] || 0,
+      sidecar_rows: sidecars,
+      sidecar_nonempty_description_rows: sidecarNonempty[source] || 0,
+      final_rows_with_sidecar_match: matched,
+      coverage_pct: finalPool > 0 ? Math.round((matched / finalPool) * 1000) / 10 : null,
+      mode,
+    };
+  }
+
+  return {
+    generated_at: new Date().toISOString(),
+    basis: 'final_public_pool_vs_description_sidecars',
+    sources: summary,
+  };
+}
+
+
 function buildSeniorRolloutProjection(seniorJobs, seniorBySource) {
   const projection = {
     generated_at: new Date().toISOString(),
@@ -1618,6 +1699,10 @@ function generateMetadata({ startTime, jobs, uniqueCount, duplicateCount, durati
     // AGG-SOURCE-1: Source tier/value/freshness visibility for operator decisions.
     source_visibility: buildSourceVisibilitySummary(jobs),
 
+    // AGG-SIDECAR-HEALTH-1: Producer-owned truth for sources whose downstream descriptions
+    // depend on sidecars because all_jobs strips description text.
+    description_delivery: buildDescriptionDeliverySummary(jobs, DATA_DIR),
+
     // AGG latency markers: producer-owned timing anchors for downstream latency measurement.
     latency_markers: buildLatencyMarkers({ startTime, duration, stageTimings, pipelineTimestamps }),
 
@@ -1772,4 +1857,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { main, mergeCarryForward, RETIRED_CARRY_FORWARD_SOURCES, normalizeSupplementalJobForMerge, summarizeSupplementalLaneForMerge, buildUsSnapshotJobs };
+module.exports = { main, mergeCarryForward, RETIRED_CARRY_FORWARD_SOURCES, normalizeSupplementalJobForMerge, summarizeSupplementalLaneForMerge, buildDescriptionDeliverySummary, buildUsSnapshotJobs };
