@@ -181,32 +181,137 @@ function normalizeSupplementalJobForMerge(job, laneMeta) {
   return normalized;
 }
 
-function loadSupplementalInputs() {
+function summarizeSupplementalLaneForMerge(laneName, laneJobs, laneMeta, nowMs = Date.now()) {
+  const info = {
+    status: 'missing',
+    skip_reason: null,
+    generated_at: laneMeta?.generated_at || null,
+    age_minutes: null,
+    jobs_loaded: Array.isArray(laneJobs) ? laneJobs.length : 0,
+    by_source: {},
+    publish_contract: laneMeta?.publish_contract || null,
+  };
+  if (!Array.isArray(laneJobs)) {
+    info.status = 'skipped_invalid';
+    info.skip_reason = 'jobs_not_array';
+    return { info, jobs: [], sourcesUsed: new Set() };
+  }
+  if (!laneMeta || typeof laneMeta !== 'object') {
+    info.status = 'skipped_invalid';
+    info.skip_reason = 'metadata_not_object';
+    return { info, jobs: [], sourcesUsed: new Set() };
+  }
+  if (laneMeta.lane_name && laneMeta.lane_name !== laneName) {
+    info.status = 'skipped_invalid';
+    info.skip_reason = 'lane_name_mismatch';
+    return { info, jobs: [], sourcesUsed: new Set() };
+  }
+
+  const normalizedJobs = [];
+  const sourcesUsed = new Set();
+  for (const job of laneJobs) {
+    const normalized = normalizeSupplementalJobForMerge(job, laneMeta);
+    if (!normalized) continue;
+    const source = normalized.source;
+    sourcesUsed.add(source);
+    info.by_source[source] = (info.by_source[source] || 0) + 1;
+    normalizedJobs.push(normalized);
+  }
+
+  const generatedTs = info.generated_at ? new Date(info.generated_at).getTime() : Number.NaN;
+  if (info.generated_at) {
+    if (Number.isNaN(generatedTs)) {
+      info.status = 'skipped_invalid';
+      info.skip_reason = 'invalid_generated_at';
+      return { info, jobs: [], sourcesUsed: new Set() };
+    }
+    info.age_minutes = Math.max(0, Math.floor((nowMs - generatedTs) / 60000));
+  }
+
+  const maxStalenessMinutes = Number(info.publish_contract?.max_staleness_minutes);
+  if (Number.isFinite(maxStalenessMinutes) && maxStalenessMinutes > 0 && Number.isFinite(generatedTs)) {
+    if (nowMs - generatedTs > maxStalenessMinutes * 60 * 1000) {
+      info.status = 'skipped_stale';
+      info.skip_reason = 'stale_artifact';
+      return { info, jobs: [], sourcesUsed: new Set() };
+    }
+  }
+
+  if (Number.isFinite(laneMeta.jobs_fetched) && laneMeta.jobs_fetched !== laneJobs.length) {
+    info.status = 'skipped_invalid';
+    info.skip_reason = 'jobs_fetched_mismatch';
+    return { info, jobs: [], sourcesUsed: new Set() };
+  }
+
+  if (laneName === 'custom') {
+    const declaredSources = laneMeta.sources && typeof laneMeta.sources === 'object'
+      ? Object.keys(laneMeta.sources).sort()
+      : [];
+    const actualSources = Object.keys(info.by_source).sort();
+    if (!declaredSources.length || declaredSources.join(',') !== actualSources.join(',')) {
+      info.status = 'skipped_invalid';
+      info.skip_reason = 'source_set_mismatch';
+      return { info, jobs: [], sourcesUsed: new Set() };
+    }
+    for (const source of declaredSources) {
+      if (laneMeta.sources[source] !== info.by_source[source]) {
+        info.status = 'skipped_invalid';
+        info.skip_reason = 'source_count_mismatch';
+        return { info, jobs: [], sourcesUsed: new Set() };
+      }
+    }
+  } else if (laneName === 'oracle') {
+    const actualSources = Object.keys(info.by_source);
+    if (actualSources.some(source => source !== 'oracle')) {
+      info.status = 'skipped_invalid';
+      info.skip_reason = 'unexpected_source';
+      return { info, jobs: [], sourcesUsed: new Set() };
+    }
+  }
+
+  info.status = 'merged';
+  return { info, jobs: normalizedJobs, sourcesUsed };
+}
+
+
+function loadSupplementalInputs(nowMs = Date.now()) {
   const jobs = [];
   const inputs = {};
   const sourcesUsed = new Set();
   for (const lane of SUPPLEMENTAL_LANE_FILES) {
-    if (!fs.existsSync(lane.jobsFile) || !fs.existsSync(lane.metaFile)) continue;
+    if (!fs.existsSync(lane.jobsFile) || !fs.existsSync(lane.metaFile)) {
+      inputs[lane.lane] = {
+        status: 'missing',
+        skip_reason: 'artifact_missing',
+        generated_at: null,
+        age_minutes: null,
+        jobs_loaded: 0,
+        by_source: {},
+        publish_contract: null,
+      };
+      continue;
+    }
     try {
       const laneJobs = JSON.parse(fs.readFileSync(lane.jobsFile, 'utf8'));
       const laneMeta = JSON.parse(fs.readFileSync(lane.metaFile, 'utf8'));
-      if (!Array.isArray(laneJobs)) continue;
-      const bySource = {};
-      for (const job of laneJobs) {
-        const normalized = normalizeSupplementalJobForMerge(job, laneMeta);
-        if (!normalized) continue;
-        const source = normalized.source;
-        sourcesUsed.add(source);
-        bySource[source] = (bySource[source] || 0) + 1;
-        jobs.push(normalized);
+      const summary = summarizeSupplementalLaneForMerge(lane.lane, laneJobs, laneMeta, nowMs);
+      inputs[lane.lane] = summary.info;
+      if (summary.info.status !== 'merged') {
+        console.warn(`⚠️ Supplemental lane ${lane.lane}: skipped (${summary.info.skip_reason})`);
+        continue;
       }
-      inputs[lane.lane] = {
-        generated_at: laneMeta.generated_at || null,
-        jobs_loaded: laneJobs.length,
-        by_source: bySource,
-        publish_contract: laneMeta.publish_contract || null,
-      };
+      for (const source of summary.sourcesUsed) sourcesUsed.add(source);
+      appendAll(jobs, summary.jobs);
     } catch (e) {
+      inputs[lane.lane] = {
+        status: 'skipped_invalid',
+        skip_reason: 'load_error',
+        generated_at: null,
+        age_minutes: null,
+        jobs_loaded: 0,
+        by_source: {},
+        publish_contract: null,
+      };
       console.warn(`⚠️ Supplemental lane ${lane.lane}: could not load artifact (${e.message})`);
     }
   }
@@ -1563,7 +1668,6 @@ function generateMetadata({ startTime, jobs, uniqueCount, duplicateCount, durati
     // Used by pipeline-alert.js for consecutive-failure detection.
     zero_yield_companies: zeroYieldCompanies || [],
 
-    // INF-OBSERV-3: Per-stage timing breakdown (ms)
     stage_timings: stageTimings || {},
 
     // AGG-HOTPATH-1: Sources intentionally excluded from the fast publish workflow.
@@ -1668,4 +1772,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { main, mergeCarryForward, RETIRED_CARRY_FORWARD_SOURCES, normalizeSupplementalJobForMerge, buildUsSnapshotJobs };
+module.exports = { main, mergeCarryForward, RETIRED_CARRY_FORWARD_SOURCES, normalizeSupplementalJobForMerge, summarizeSupplementalLaneForMerge, buildUsSnapshotJobs };
