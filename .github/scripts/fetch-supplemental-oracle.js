@@ -13,6 +13,8 @@ const DATA_DIR = path.join(process.cwd(), '.github', 'data');
 const COMPANY_LIST_PATH = path.join(SHARED, 'fetchers', 'company-list.json');
 const JOBS_FILE = path.join(DATA_DIR, 'supplemental-oracle-jobs.json');
 const META_FILE = path.join(DATA_DIR, 'supplemental-oracle-metadata.json');
+const PREV_ALL_JOBS_FILE = path.join(DATA_DIR, 'all_jobs.json');
+const TECH_DOMAINS = new Set(['software', 'data_science', 'hardware', 'ai']);
 
 function hasR2Env() {
   return Boolean(process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY && process.env.R2_ENDPOINT && process.env.R2_BUCKET_NAME);
@@ -25,6 +27,28 @@ function isGitHubActions() {
 function looksLikeRichOracleDescription(text) {
   if (!text || typeof text !== 'string') return false;
   return /^(Responsibilities|Qualifications):/m.test(text) || text.length >= 2000;
+}
+
+function parseJsonOrNdjson(text) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return [];
+  if (trimmed[0] === '[') {
+    try {
+      const parsed = JSON.parse(trimmed);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {}
+  }
+  return trimmed.split('\n').filter(Boolean).map(line => {
+    try { return JSON.parse(line); } catch { return null; }
+  }).filter(Boolean);
+}
+
+function isCurrentUsTechOracle(job) {
+  if (!job || job.source !== 'oracle') return false;
+  const tags = job.tags || {};
+  const locations = tags.locations || [];
+  const domains = tags.domains || [];
+  return locations.includes('us') && domains.some(domain => TECH_DOMAINS.has(domain));
 }
 
 function loadOracleDetailCache() {
@@ -51,13 +75,29 @@ function loadOracleDetailCache() {
   return { cachedIds, priorityIds };
 }
 
+function loadCurrentBoardPriorityIds(cachedIds, existingPriorityIds, allJobsPath = PREV_ALL_JOBS_FILE) {
+  const priorityIds = new Set(existingPriorityIds);
+  if (!fs.existsSync(allJobsPath)) return priorityIds;
+  try {
+    const rows = parseJsonOrNdjson(fs.readFileSync(allJobsPath, 'utf8'));
+    for (const job of rows) {
+      if (!isCurrentUsTechOracle(job)) continue;
+      if (cachedIds.has(job.id)) continue;
+      priorityIds.add(job.id);
+    }
+  } catch {}
+  if (priorityIds.size > existingPriorityIds.size) {
+    console.log(`  Oracle board priority IDs: +${priorityIds.size - existingPriorityIds.size} current US tech rows from previous all_jobs.json`);
+  }
+  return priorityIds;
+}
+
 async function uploadRequired(r2, name, file, contentType) {
   const uploaded = await r2.uploadRaw(name, fs.readFileSync(file, 'utf8'), contentType);
   if (!uploaded) {
     throw new Error(`R2 upload failed for ${name}`);
   }
 }
-
 
 async function main() {
   const start = Date.now();
@@ -67,10 +107,11 @@ async function main() {
   const oracleCompanies = companyList.oracle || [];
 
   const oracleCache = loadOracleDetailCache();
+  const priorityDescriptionIds = loadCurrentBoardPriorityIds(oracleCache.cachedIds, oracleCache.priorityIds);
   console.log(`🏛️ Supplemental Oracle lane: ${oracleCompanies.length} companies configured`);
   const jobs = await fetchAllOracleJobs(oracleCompanies, {
     cachedDescriptionIds: oracleCache.cachedIds,
-    priorityDescriptionIds: oracleCache.priorityIds,
+    priorityDescriptionIds,
   });
   const durationMs = Date.now() - start;
 
@@ -101,6 +142,7 @@ async function main() {
     companies_configured: oracleCompanies.length,
     jobs_fetched: payload.length,
     duration_ms: durationMs,
+    current_board_priority_ids: priorityDescriptionIds.size,
   };
 
   fs.writeFileSync(JOBS_FILE, JSON.stringify(payload, null, 2), 'utf8');
@@ -128,7 +170,16 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  console.error('❌ Supplemental Oracle lane failed:', err.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(err => {
+    console.error('❌ Supplemental Oracle lane failed:', err.message);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  looksLikeRichOracleDescription,
+  parseJsonOrNdjson,
+  isCurrentUsTechOracle,
+  loadCurrentBoardPriorityIds,
+};
