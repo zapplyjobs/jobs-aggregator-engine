@@ -80,10 +80,10 @@ jobs:
       run: |
         echo "📥 Seeding enriched descriptions (WD/SR)..."
         # TAG-7: WD/SR descriptions needed before tagging (Step 5) for description fallback.
-        # INF-BLOAT-6: Fetch ALL chunks (pool uses 19+ chunks).
-        # AGG-PIPE-18 Phase A: R2-first seeding. Falls back to GitHub curl per chunk.
+        # A179 parity proof: current Workday + SmartRecruiters final-row tagging stays unchanged
+        # with chunks 1-8 only, while those chunks cover about 97% of current enriched overlap.
         TOTAL=0
-        for CHUNK in $(seq 1 30); do
+        for CHUNK in $(seq 1 8); do
           CHUNK_FILE="descriptions-enriched-${CHUNK}.jsonl"
           node -e "
           const { createR2Client } = require('./.github/scripts/aggregator/lib/storage/r2-client');
