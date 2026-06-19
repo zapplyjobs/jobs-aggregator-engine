@@ -81,8 +81,31 @@ jobs:
         echo "📥 Seeding enriched descriptions (WD/SR)..."
         # TAG-7: WD/SR descriptions needed before tagging (Step 5) for description fallback.
         # INF-BLOAT-6: Fetch ALL chunks (pool uses 19+ chunks).
-        # AGG-PIPE-18 Phase A: R2-first seeding. Falls back to GitHub per chunk.
-        node .github/scripts/seed-enriched-descriptions.js
+        # AGG-PIPE-18 Phase A: R2-first seeding. Falls back to GitHub curl per chunk.
+        TOTAL=0
+        for CHUNK in $(seq 1 30); do
+          CHUNK_FILE="descriptions-enriched-${CHUNK}.jsonl"
+          node -e "
+          const { createR2Client } = require('./.github/scripts/aggregator/lib/storage/r2-client');
+          async function main() {
+            const r2 = createR2Client({ prefix: 'data/' });
+            const result = await r2.downloadToFile('${CHUNK_FILE}', '.github/data/${CHUNK_FILE}');
+            if (result) { console.log('OK'); } else { process.exit(1); }
+          }
+          main().catch(() => process.exit(1));
+          " 2>/dev/null && \
+            LINES=$(wc -l < ".github/data/${CHUNK_FILE}") && \
+            TOTAL=$((TOTAL + LINES)) && \
+            echo "  chunk ${CHUNK}: ${LINES} entries (R2)" || \
+            curl -sf "https://raw.githubusercontent.com/zapplyjobs/jobs-data-2026/main/.github/data/${CHUNK_FILE}?t=$(date +%s)" \
+              -o ".github/data/${CHUNK_FILE}" 2>/dev/null && \
+              LINES=$(wc -l < ".github/data/${CHUNK_FILE}") && \
+              TOTAL=$((TOTAL + LINES)) && \
+              echo "  chunk ${CHUNK}: ${LINES} entries (GitHub)" || \
+              echo "  chunk ${CHUNK}: not found (skipped)"
+        done
+        [ $TOTAL -gt 0 ] && echo "✅ Seeded ${TOTAL} enriched descriptions total" || \
+          echo "⚠️ No descriptions-enriched chunks found — description fallback will be inactive"
       env:
         R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
         R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -137,7 +160,77 @@ jobs:
     - name: "Seed remaining description sidecars from R2 (fallback: GitHub)"
       run: |
         echo "📥 Seeding remaining description sidecars..."
-        node .github/scripts/seed-description-sidecars.js
+        node - <<'NODE'
+        const fs = require('fs');
+        const path = require('path');
+        const https = require('https');
+        const { createR2Client } = require('./.github/scripts/aggregator/lib/storage/r2-client');
+        const DATA_DIR = '.github/data';
+        const GH_HEADERS = {
+          'User-Agent': 'ZJP-Sidecar-Seed',
+          'Authorization': `Bearer ${process.env.GH_PAT || process.env.GITHUB_TOKEN}`,
+          'Accept': 'application/vnd.github.v3+json',
+        };
+        function getJson(url) {
+          return new Promise((resolve, reject) => {
+            https.get(url, { headers: GH_HEADERS }, (res) => {
+              let data = '';
+              res.on('data', chunk => data += chunk);
+              res.on('end', () => {
+                try { resolve(JSON.parse(data)); }
+                catch (e) { reject(e); }
+              });
+            }).on('error', reject);
+          });
+        }
+        function download(url, target) {
+          return new Promise((resolve, reject) => {
+            const file = fs.createWriteStream(target);
+            https.get(url, { headers: GH_HEADERS }, (res) => {
+              if (res.statusCode !== 200) {
+                file.close();
+                fs.unlink(target, () => resolve(false));
+                return;
+              }
+              res.pipe(file);
+              file.on('finish', () => file.close(() => resolve(true)));
+            }).on('error', err => {
+              file.close();
+              fs.unlink(target, () => reject(err));
+            });
+          });
+        }
+        async function main() {
+          fs.mkdirSync(DATA_DIR, { recursive: true });
+          const r2 = createR2Client({ prefix: 'data/' });
+          let seeded = 0;
+          try {
+            const objects = await r2.list('descriptions-');
+            for (const obj of objects) {
+              const name = path.basename(obj.key || '');
+              if (!/^descriptions-.*\.jsonl$/.test(name)) continue;
+              const target = path.join(DATA_DIR, name);
+              if (fs.existsSync(target)) continue;
+              const result = await r2.downloadToFile(name, target);
+              if (result) seeded++;
+            }
+          } catch {}
+          let ghSeeded = 0;
+          try {
+            const listing = await getJson('https://api.github.com/repos/zapplyjobs/jobs-data-2026/contents/.github/data');
+            for (const item of listing) {
+              if (!item || !/^descriptions-.*\.jsonl$/.test(item.name || '')) continue;
+              const target = path.join(DATA_DIR, item.name);
+              if (fs.existsSync(target)) continue;
+              const ok = await download(item.download_url, target);
+              if (ok) ghSeeded++;
+            }
+          } catch {}
+          console.log(`SEEDED_R2:${seeded}`);
+          console.log(`SEEDED_GH:${ghSeeded}`);
+        }
+        main().catch(err => { console.error(err.message); process.exit(1); });
+        NODE
       env:
         GH_PAT: ${{ secrets.GH_PAT }}
         GITHUB_TOKEN: ${{ secrets.GH_PAT }}
