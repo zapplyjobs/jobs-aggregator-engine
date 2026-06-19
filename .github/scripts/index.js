@@ -126,6 +126,10 @@ function activePublicWindowTs(job, now = Date.now()) {
   return postedTs;
 }
 
+function applicableTtlMs(job) {
+  return job?.tags?.employment === 'internship' ? INTERNSHIP_TTL_MS : DEDUPE_TTL_MS;
+}
+
 /**
  * AGG-32: Filter stale jobs by posted_at TTL.
  * AGG-6 date overwrite disabled A86 — jobs keep their source-reported posted_at.
@@ -136,7 +140,7 @@ function resolvePostedAt(publicJobs, prevLines) {
   let staleRemoved = 0;
   const filtered = publicJobs.filter(job => {
     if (!job.posted_at) { staleRemoved++; return false; }
-    const jobTtlMs = job.tags?.employment === 'internship' ? INTERNSHIP_TTL_MS : DEDUPE_TTL_MS;
+    const jobTtlMs = applicableTtlMs(job);
     if (activePublicWindowTs(job) < Date.now() - jobTtlMs) { staleRemoved++; return false; }
     return true;
   });
@@ -384,7 +388,7 @@ function mergeCarryForward(publicJobs, prevLines, currentIds, currentFingerprint
       if (job.fingerprint && currentFingerprints.has(job.fingerprint)) { fpSkipCount++; continue; }
       if (!job.posted_at) { nullDateCount++; continue; }
       const postedTs = new Date(job.posted_at).getTime();
-      const jobTtlMs = job.tags?.employment === 'internship' ? INTERNSHIP_TTL_MS : DEDUPE_TTL_MS;
+      const jobTtlMs = applicableTtlMs(job);
       if (postedTs < Date.now() - jobTtlMs) continue;
       if (isSeniorJob(job)) continue;
       if (RETIRED_CARRY_FORWARD_SOURCES.has((job.source || '').toLowerCase())) {
@@ -1901,4 +1905,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { main, mergeCarryForward, RETIRED_CARRY_FORWARD_SOURCES, normalizeSupplementalJobForMerge, summarizeSupplementalLaneForMerge, buildDescriptionDeliverySummary, buildUsSnapshotJobs, activePublicWindowTs, injectDescriptions };
+module.exports = { main, resolvePostedAt, mergeCarryForward, RETIRED_CARRY_FORWARD_SOURCES, normalizeSupplementalJobForMerge, summarizeSupplementalLaneForMerge, buildDescriptionDeliverySummary, buildUsSnapshotJobs, activePublicWindowTs, applicableTtlMs, injectDescriptions };
