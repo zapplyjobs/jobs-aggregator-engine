@@ -29,7 +29,7 @@ env:
 jobs:
   bump:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       contents: write
 
@@ -139,35 +139,88 @@ jobs:
 
           echo "Bumping $SUBMODULE_NAME ($SUBMODULE_PATH) to ${TARGET_SHA:0:12} in ${#REPOS[@]} repo(s)"
 
+          # Gated fallback for branch-protected main (e.g. jobs-aggregator-private,
+          # whose main requires the 'gate' status check). A direct git/refs/heads/main
+          # PATCH is rejected while the required check is missing, so push a temp
+          # branch (gate.yml triggers on push to any branch and runs on the bump
+          # commit), wait for gate to pass, then fast-forward main (check now
+          # satisfied) and delete the temp branch. Only used when direct update fails.
+          gated_update() {
+            local repo="$1" new_commit="$2"
+            local branch="inf/bump-${SUBMODULE_NAME}-${GITHUB_RUN_ID}"
+            local bref="refs/heads/$branch"
+            if ! printf '{"ref":"%s","sha":"%s"}' "$bref" "$new_commit" \
+                | gh api "repos/$repo/git/refs" --method POST --input - --silent 2>/dev/null; then
+              echo "    gated: temp-branch create failed for $repo"
+              return 1
+            fi
+            echo "    gated: pushed $branch -> waiting for gate.yml"
+            local conclusion="" waited=0
+            while [ "$waited" -lt 600 ]; do
+              conclusion=$(gh api "repos/$repo/actions/workflows/gate.yml/runs?branch=$branch&per_page=1" \
+                           --jq '.workflow_runs[0].conclusion // empty' 2>/dev/null)
+              [ -n "$conclusion" ] && break
+              sleep 20; waited=$((waited + 20))
+            done
+            if [ "$conclusion" != "success" ]; then
+              echo "    gated: gate conclusion='${conclusion:-timeout}' (expected success); abandoning $repo"
+              gh api "repos/$repo/git/refs/$bref" --method DELETE --silent 2>/dev/null || true
+              return 1
+            fi
+            local update
+            if update=$(printf '{"sha":"%s","force":false}' "$new_commit" \
+                        | gh api "repos/$repo/git/refs/heads/main" --method PATCH --input - --jq '.object.sha' 2>/dev/null) \
+               && [ -n "$update" ]; then
+              echo "    gated: main -> ${update:0:12}"
+              gh api "repos/$repo/git/refs/$bref" --method DELETE --silent 2>/dev/null || true
+              echo "$update"; return 0
+            fi
+            echo "    gated: main fast-forward still rejected for $repo"
+            gh api "repos/$repo/git/refs/$bref" --method DELETE --silent 2>/dev/null || true
+            return 1
+          }
+
           for REPO in "${REPOS[@]}"; do
             REPO_NAME="${REPO#zapplyjobs/}"
             SUCCESS=false
 
+            HEAD=$(gh api "repos/$REPO/git/ref/heads/main" --jq '.object.sha' 2>/dev/null) || { echo "  FAIL: $REPO_NAME (no main ref)"; RESULTS="${RESULTS}FAIL: ${REPO_NAME}\n"; FAIL=$((FAIL + 1)); continue; }
+            TREE=$(gh api "repos/$REPO/git/commits/$HEAD" --jq '.tree.sha' 2>/dev/null) || { echo "  FAIL: $REPO_NAME (no tree)"; RESULTS="${RESULTS}FAIL: ${REPO_NAME}\n"; FAIL=$((FAIL + 1)); continue; }
+
+            TREE_INPUT=$(printf '{"base_tree":"%s","tree":[{"path":"%s","mode":"160000","type":"commit","sha":"%s"}]}' "$TREE" "$SUBMODULE_PATH" "$TARGET_SHA")
+            NEW_TREE=$(echo "$TREE_INPUT" | gh api "repos/$REPO/git/trees" --method POST --input - --jq '.sha' 2>/dev/null) || { echo "  FAIL: $REPO_NAME (tree create)"; RESULTS="${RESULTS}FAIL: ${REPO_NAME}\n"; FAIL=$((FAIL + 1)); continue; }
+
+            COMMIT_INPUT=$(printf '{"message":"chore: bump %s to %s","tree":"%s","parents":["%s"]}' "$SUBMODULE_NAME" "$SHORT_SHA" "$NEW_TREE" "$HEAD")
+            NEW_COMMIT=$(echo "$COMMIT_INPUT" | gh api "repos/$REPO/git/commits" --method POST --input - --jq '.sha' 2>/dev/null) || { echo "  FAIL: $REPO_NAME (commit create)"; RESULTS="${RESULTS}FAIL: ${REPO_NAME}\n"; FAIL=$((FAIL + 1)); continue; }
+
+            # 1) direct ref update (works on unprotected repos; retry for transient races)
             for ATTEMPT in 1 2 3; do
-              HEAD=$(gh api "repos/$REPO/git/ref/heads/main" --jq '.object.sha' 2>/dev/null) || { sleep 5; continue; }
-              TREE=$(gh api "repos/$REPO/git/commits/$HEAD" --jq '.tree.sha' 2>/dev/null) || { sleep 5; continue; }
-
-              TREE_INPUT=$(printf '{"base_tree":"%s","tree":[{"path":"%s","mode":"160000","type":"commit","sha":"%s"}]}' "$TREE" "$SUBMODULE_PATH" "$TARGET_SHA")
-              NEW_TREE=$(echo "$TREE_INPUT" | gh api "repos/$REPO/git/trees" --method POST --input - --jq '.sha' 2>/dev/null) || { sleep 5; continue; }
-
-              COMMIT_INPUT=$(printf '{"message":"chore: bump %s to %s","tree":"%s","parents":["%s"]}' "$SUBMODULE_NAME" "$SHORT_SHA" "$NEW_TREE" "$HEAD")
-              NEW_COMMIT=$(echo "$COMMIT_INPUT" | gh api "repos/$REPO/git/commits" --method POST --input - --jq '.sha' 2>/dev/null) || { sleep 5; continue; }
-
-              REF_INPUT=$(printf '{"sha":"%s","force":false}' "$NEW_COMMIT")
-              if UPDATE_RESULT=$(echo "$REF_INPUT" | gh api "repos/$REPO/git/refs/heads/main" --method PATCH --input - --jq '.object.sha' 2>/dev/null) && [ -n "$UPDATE_RESULT" ]; then
-                echo "  PASS: $REPO_NAME -> ${UPDATE_RESULT:0:12}"
+              if UPDATE_RESULT=$(printf '{"sha":"%s","force":false}' "$NEW_COMMIT" \
+                                 | gh api "repos/$REPO/git/refs/heads/main" --method PATCH --input - --jq '.object.sha' 2>/dev/null) \
+                 && [ -n "$UPDATE_RESULT" ]; then
+                echo "  PASS (direct): $REPO_NAME -> ${UPDATE_RESULT:0:12}"
                 RESULTS="${RESULTS}PASS: ${REPO_NAME}\n"
                 PASS=$((PASS + 1))
                 SUCCESS=true
                 break
-              else
-                echo "  [$ATTEMPT/3] $REPO_NAME: ref update failed, retrying..."
-                sleep 5
               fi
+              echo "  [$ATTEMPT/3] $REPO_NAME: direct ref-update failed, retrying..."
+              sleep 5
             done
 
+            # 2) gated fallback for branch-protected main
             if [ "$SUCCESS" = false ]; then
-              echo "  FAIL: $REPO_NAME (3 attempts)"
+              echo "  $REPO_NAME: direct update rejected (branch-protected). Trying gated route..."
+              if GATED_SHA=$(gated_update "$REPO" "$NEW_COMMIT"); then
+                echo "  PASS (gated): $REPO_NAME -> ${GATED_SHA:0:12}"
+                RESULTS="${RESULTS}PASS: ${REPO_NAME} (gated)\n"
+                PASS=$((PASS + 1))
+                SUCCESS=true
+              fi
+            fi
+
+            if [ "$SUCCESS" = false ]; then
+              echo "  FAIL: $REPO_NAME (direct + gated)"
               RESULTS="${RESULTS}FAIL: ${REPO_NAME}\n"
               FAIL=$((FAIL + 1))
             fi
