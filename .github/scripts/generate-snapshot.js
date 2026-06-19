@@ -27,12 +27,12 @@ const RUN_ID = process.env.GITHUB_RUN_ID || 'local';
 const STALE_HOURS = 2;
 
 const CONSUMER_REPOS = [
-  { owner: 'zapplyjobs', repo: 'New-Grad-Jobs-2026',                             name: 'New-Grad'      },
-  { owner: 'zapplyjobs', repo: 'Internships-2026',                               name: 'Internships'   },
-  { owner: 'zapplyjobs', repo: 'New-Grad-Software-Engineering-Jobs-2026',        name: 'Software'      },
-  { owner: 'zapplyjobs', repo: 'New-Grad-Data-Science-Jobs-2026',                name: 'Data-Science'  },
-  { owner: 'zapplyjobs', repo: 'New-Grad-Hardware-Engineering-Jobs-2026',        name: 'Hardware'      },
-  { owner: 'zapplyjobs', repo: 'New-Grad-Healthcare-Jobs-2026',                  name: 'Healthcare'    },
+  { owner: 'zapplyjobs', repo: 'New-Grad-Jobs-2027',                             name: 'New-Grad'      },
+  { owner: 'zapplyjobs', repo: 'Internships-2027',                               name: 'Internships'   },
+  { owner: 'zapplyjobs', repo: 'New-Grad-Software-Engineering-Jobs-2027',        name: 'Software'      },
+  { owner: 'zapplyjobs', repo: 'New-Grad-Data-Science-Jobs-2027',                name: 'Data-Science'  },
+  { owner: 'zapplyjobs', repo: 'New-Grad-Hardware-Engineering-Jobs-2027',        name: 'Hardware'      },
+  { owner: 'zapplyjobs', repo: 'New-Grad-Healthcare-Jobs-2027',                  name: 'Healthcare'    },
   { owner: 'zapplyjobs', repo: 'jobs-aggregator-private',                        name: 'Aggregator'    },
 ];
 
@@ -431,7 +431,7 @@ ${enrichLine}
 ## IMPLEMENTATION (Coder reads this)
 
 **Submodule HEAD:** \`${pipeline.submodule_head || '?'}\`
-**Repos to bump after submodule change:** jobs-aggregator-private · New-Grad-Jobs-2026 · Internships-2026 · Software · DS · HW · Healthcare (7 total)
+**Repos to bump after submodule change:** jobs-aggregator-private · New-Grad-Jobs-2027 · Internships-2027 · Software · DS · HW · Healthcare (7 total)
 **Next unblocked task:** See \`projects/zjp/TODO.md\` — not auto-generated.
 
 ---
