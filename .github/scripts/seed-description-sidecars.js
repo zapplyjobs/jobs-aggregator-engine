@@ -6,7 +6,7 @@ const path = require('path');
 const https = require('https');
 
 const DATA_DIR = '.github/data';
-const CONCURRENCY = 8;
+const CONCURRENCY = 4;
 const GH_HEADERS = {
   'User-Agent': 'ZJP-Sidecar-Seed',
   'Authorization': `Bearer ${process.env.GH_PAT || process.env.GITHUB_TOKEN}`,
