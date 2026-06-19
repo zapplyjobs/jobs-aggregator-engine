@@ -81,7 +81,7 @@ jobs:
 
           case "$SUBMODULE_NAME" in
             shared)
-              echo "repos=zapplyjobs/jobs-aggregator-private zapplyjobs/jobs-data-2026 zapplyjobs/New-Grad-Jobs-2026 zapplyjobs/Internships-2026 zapplyjobs/New-Grad-Software-Engineering-Jobs-2026 zapplyjobs/New-Grad-Data-Science-Jobs-2026 zapplyjobs/New-Grad-Hardware-Engineering-Jobs-2026 zapplyjobs/New-Grad-Healthcare-Jobs-2026" >> "$GITHUB_OUTPUT"
+              echo "repos=zapplyjobs/jobs-aggregator-private zapplyjobs/jobs-data-2026 zapplyjobs/New-Grad-Jobs-2027 zapplyjobs/Internships-2027 zapplyjobs/New-Grad-Software-Engineering-Jobs-2027 zapplyjobs/New-Grad-Data-Science-Jobs-2027 zapplyjobs/New-Grad-Hardware-Engineering-Jobs-2027 zapplyjobs/New-Grad-Healthcare-Jobs-2027" >> "$GITHUB_OUTPUT"
               ;;
             aggregator)
               echo "repos=zapplyjobs/jobs-aggregator-private" >> "$GITHUB_OUTPUT"
@@ -90,7 +90,7 @@ jobs:
               echo "repos=zapplyjobs/jobs-data-2026" >> "$GITHUB_OUTPUT"
               ;;
             consumer)
-              echo "repos=zapplyjobs/New-Grad-Jobs-2026 zapplyjobs/Internships-2026 zapplyjobs/New-Grad-Software-Engineering-Jobs-2026 zapplyjobs/New-Grad-Data-Science-Jobs-2026 zapplyjobs/New-Grad-Hardware-Engineering-Jobs-2026 zapplyjobs/New-Grad-Healthcare-Jobs-2026" >> "$GITHUB_OUTPUT"
+              echo "repos=zapplyjobs/New-Grad-Jobs-2027 zapplyjobs/Internships-2027 zapplyjobs/New-Grad-Software-Engineering-Jobs-2027 zapplyjobs/New-Grad-Data-Science-Jobs-2027 zapplyjobs/New-Grad-Hardware-Engineering-Jobs-2027 zapplyjobs/New-Grad-Healthcare-Jobs-2027" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "::error::Unknown submodule: $SUBMODULE_NAME"
@@ -115,12 +115,12 @@ jobs:
           gh api repos/zapplyjobs/jobs-aggregator-private/actions/workflows/234555372/disable --method PUT --silent && echo "Disabled: aggregator/Fetch All Jobs" || echo "WARN: Could not disable"
           gh api repos/zapplyjobs/jobs-data-2026/actions/workflows/239692001/disable --method PUT --silent && echo "Disabled: jobs-data/Enrich Jobs" || echo "WARN: Could not disable"
           declare -A CONSUMER_WORKFLOWS=(
-            ["New-Grad-Jobs-2026"]="172507830"
-            ["Internships-2026"]="197229424"
-            ["New-Grad-Software-Engineering-Jobs-2026"]="194987480"
-            ["New-Grad-Data-Science-Jobs-2026"]="181160192"
-            ["New-Grad-Hardware-Engineering-Jobs-2026"]="181164092"
-            ["New-Grad-Healthcare-Jobs-2026"]="189226548"
+            ["New-Grad-Jobs-2027"]="172507830"
+            ["Internships-2027"]="197229424"
+            ["New-Grad-Software-Engineering-Jobs-2027"]="194987480"
+            ["New-Grad-Data-Science-Jobs-2027"]="181160192"
+            ["New-Grad-Hardware-Engineering-Jobs-2027"]="181164092"
+            ["New-Grad-Healthcare-Jobs-2027"]="189226548"
           )
           for REPO in "${!CONSUMER_WORKFLOWS[@]}"; do
             WF_ID="${CONSUMER_WORKFLOWS[$REPO]}"
@@ -205,12 +205,12 @@ jobs:
           gh api repos/zapplyjobs/jobs-aggregator-private/actions/workflows/234555372/enable --method PUT --silent && echo "Enabled: aggregator/Fetch All Jobs" || true
           gh api repos/zapplyjobs/jobs-data-2026/actions/workflows/239692001/enable --method PUT --silent && echo "Enabled: jobs-data/Enrich Jobs" || true
           declare -A CONSUMER_WORKFLOWS=(
-            ["New-Grad-Jobs-2026"]="172507830"
-            ["Internships-2026"]="197229424"
-            ["New-Grad-Software-Engineering-Jobs-2026"]="194987480"
-            ["New-Grad-Data-Science-Jobs-2026"]="181160192"
-            ["New-Grad-Hardware-Engineering-Jobs-2026"]="181164092"
-            ["New-Grad-Healthcare-Jobs-2026"]="189226548"
+            ["New-Grad-Jobs-2027"]="172507830"
+            ["Internships-2027"]="197229424"
+            ["New-Grad-Software-Engineering-Jobs-2027"]="194987480"
+            ["New-Grad-Data-Science-Jobs-2027"]="181160192"
+            ["New-Grad-Hardware-Engineering-Jobs-2027"]="181164092"
+            ["New-Grad-Healthcare-Jobs-2027"]="189226548"
           )
           for REPO in "${!CONSUMER_WORKFLOWS[@]}"; do
             WF_ID="${CONSUMER_WORKFLOWS[$REPO]}"
