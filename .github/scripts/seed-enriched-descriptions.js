@@ -7,7 +7,7 @@ const https = require('https');
 
 const DATA_DIR = '.github/data';
 const CHUNK_COUNT = 30;
-const CONCURRENCY = 2;   // Bounded, conservative concurrency after A177a showed higher fan-out could stall R2 seeding in workflow
+const CONCURRENCY = 6;
 
 function fetchGitHubFile(url, target) {
   return new Promise((resolve) => {
