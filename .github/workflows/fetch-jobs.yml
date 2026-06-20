@@ -763,6 +763,23 @@ jobs:
 
           await r2.writeManifest({ files_uploaded: ok, files_failed: fail, required_files_failed, pipeline_run: process.env.GITHUB_RUN_ID });
           console.log('R2 upload done: ' + ok + ' ok, ' + fail + ' failed');
+          // R2-prune superseded sidecars (AGG-R2-SINGLEFILE-1): delete R2 copies of files the
+          // producer removed locally as stale. Manifest-driven — never blanket-deletes; only runs
+          // when this run's required uploads succeeded. Old ATS descriptions (D2) are never listed.
+          if (required_files_failed === 0) {
+            try {
+              const rmManifest = path.join(dataDir, '.sidecar-removed.json');
+              if (fs.existsSync(rmManifest)) {
+                const rmFiles = JSON.parse(fs.readFileSync(rmManifest, 'utf8'));
+                if (Array.isArray(rmFiles) && rmFiles.length > 0) {
+                  const removed = await r2.deleteObjects(rmFiles);
+                  console.log('R2 sidecar prune: removed ' + removed + ' superseded object(s): ' + rmFiles.join(', '));
+                }
+              }
+            } catch (e) {
+              console.error('R2 sidecar prune skipped: ' + e.message);
+            }
+          }
           console.log('Required R2 upload failures: ' + required_files_failed);
           if (required_files_failed > 0) {
             throw new Error('Required R2 upload failures: ' + required_files_failed);

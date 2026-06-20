@@ -999,7 +999,17 @@ async function main() {
     // Step 8b: Write per-source description sidecars (AGG-PIPE-13: extracted to sidecar-writer.js)
     console.log('📄 Step 8b: Writing description sidecars...');
     _stepStart = Date.now();
-    const { writtenFiles: sidecarFiles, stats: sidecarStats } = writeSidecars(sortedJobs, DATA_DIR);
+    const { writtenFiles: sidecarFiles, stats: sidecarStats, removedFiles: sidecarRemoved } = writeSidecars(sortedJobs, DATA_DIR);
+    // R2-prune manifest (AGG-R2-SINGLEFILE-1): list sidecar files removed locally as stale
+    // so the publish step can delete the superseded R2 copies. Always (re)write or clear it
+    // so a prior run's manifest never causes spurious deletes on a clean run.
+    const _removedManifest = path.join(DATA_DIR, '.sidecar-removed.json');
+    if (sidecarRemoved && sidecarRemoved.size > 0) {
+      fs.writeFileSync(_removedManifest, JSON.stringify([...sidecarRemoved]));
+      console.log(`🗑️  R2-prune manifest: ${sidecarRemoved.size} stale sidecar file(s) queued for R2 deletion`);
+    } else {
+      try { fs.unlinkSync(_removedManifest); } catch (_) {}
+    }
     stageTimings.step8b_sidecars_ms = Date.now() - _stepStart;
     pipelineTimestamps.sidecars_written_at = new Date().toISOString();
     console.log('');
