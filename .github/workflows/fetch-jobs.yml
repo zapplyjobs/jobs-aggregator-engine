@@ -2,6 +2,11 @@ name: Fetch All Jobs
 
 on:
   workflow_dispatch:
+    inputs:
+      deadline_cap_min:
+        description: 'AGG-B2 drill lever: override the degrade cap in minutes (default 20 = production; a value like 2 trips the latch on a healthy run for an end-to-end degrade drill - publishes a degraded-but-complete artifact, self-heals next run)'
+        required: false
+        default: '20'
   # schedule REMOVED (INF-FETCHJOBS-DUAL-TRIGGER-1): the CF Worker job-board-cron-worker
   # (observed dispatch every 10 min as of 2026-09-06, with hasActiveWorkflowRun guard) is the
   # SOLE trigger. GHA schedule caused a dual-trigger that doubled dispatches + piled the
@@ -37,6 +42,17 @@ jobs:
         fetch-depth: 1  # Shallow clone — rebase fetches missing objects on demand
         submodules: recursive
         token: ${{ secrets.GH_PAT }}
+
+    - name: Record workflow start (AGG-B2 clock anchor)
+      # AGG-B2-DEADLINE-PERSIST-IMPL-1: moved the workflow-start.txt stamp write here
+      # from "Create logs directory" (was after transcrypt/setup/npm-ci). The engine
+      # clock must anchor as close to the JOB deadline as possible - the later stamp
+      # made T-degrade short by the whole setup offset (~1.5-4 min observed). The
+      # first runner step after provisioning+checkout is the earliest capture point
+      # a run: step can get (checkout itself is a uses: step).
+      run: |
+        mkdir -p .github/data
+        date -u +%s > .github/data/workflow-start.txt
 
     - name: Install transcrypt
       run: |
@@ -91,7 +107,9 @@ jobs:
     - name: Create logs directory
       run: |
         mkdir -p .github/logs .github/data
-        date -u +%s > .github/data/workflow-start.txt
+        # (workflow-start.txt stamp moved to "Record workflow start" right after Checkout
+        # - AGG-B2-DEADLINE-PERSIST-IMPL-1; do not rewrite it here, it would shrink the
+        # engine's degrade margin by the setup offset again.)
 
     - name: "Seed pipeline artifacts from R2 (parallel — AGG-RUNTIME-L0-1)"
       # AGG-RUNTIME-WALL-ALERT-GAP-1 lever L0: the 12 inline seed steps extracted to
@@ -216,10 +234,25 @@ jobs:
         })().catch(e => { console.error('⚠️ link-health generation failed (non-blocking): ' + e.message); });
         "
 
-    - name: Fetch jobs from all sources
+    - name: "Fetch jobs from all sources"
       run: set -o pipefail; node .github/scripts/index.js 2>&1 | tee .github/logs/fetch.log
       env:
         JSEARCH_API_KEY: ${{ secrets.JSEARCH_API_KEY }}
+        # AGG-B2: engine cap pinned to the yml timeout so the two constants cannot
+        # drift (consensus hardening); the drill input overrides it deliberately.
+        DEADLINE_CAP_MIN: ${{ github.event.inputs.deadline_cap_min || '20' }}
+
+    - name: "Upload degrade checkpoint pool (AGG-B2 diagnosis artifact - never seeded)"
+      # AGG-B2-DEADLINE-PERSIST-IMPL-1 alternative A: near-cap pool snapshot for
+      # post-mortem fidelity. GitHub Actions artifact ONLY - deliberately outside the
+      # R2 descriptions-* namespace and the seed-r2-artifacts.js target list, so no
+      # seed or consumer path can ever read it (falsifier E).
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: b2-checkpoint-pool
+        path: .github/data/checkpoint_pool.json
+        if-no-files-found: ignore
 
     - name: Post-deploy invariant checks
       run: |
