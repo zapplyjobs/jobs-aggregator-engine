@@ -10,7 +10,7 @@ name: Fetch Trakstar Supplemental
 on:
   workflow_dispatch:
   schedule:
-    - cron: '53 * * * *'  # hourly GHA schedule (Workflow Trigger Policy option 1; unused offset). Trakstar supply is slow-moving engineering volume; seen-set diff + 180/run detail budget converges in ~2-3 days from cold.
+    - cron: '11 * * * *'  # hourly GHA schedule (Workflow Trigger Policy option 1). Minute 11 shares the hourly band with lanes at :23/:41/:53 (minute-sharing precedent: jobvite+phenom both :23). Trakstar supply is slow-moving engineering volume; seen-set diff + 90/run detail budget converges in under a day from cold.
 concurrency:
   group: fetch-trakstar-supplemental
   cancel-in-progress: false
@@ -27,12 +27,17 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       NODE_OPTIONS: --max-old-space-size=4096
       # Packet s4 sub-threshold detail pacing (no tarpit observed on the
-      # platform, same-class prudence as JazzHR); 4s x 180 = 720s detail
-      # phase + ~1min sitemap walk + seed/upload headroom fits the 15-min
-      # timeout. Producer derives budget from pace when TRAKSTAR_DETAIL_BUDGET
-      # is unset (720000/4000 = 180) - set both together when retuning.
+      # platform, same-class prudence as JazzHR). Review fix P1 (A315): budget
+      # 180 did NOT fit the 15-min job timeout on cold start once per-fetch
+      # latency is counted (runDetailPhase sleeps before every fetch: 180x4s
+      # = 720s sleeps + ~110-145s latency + sitemap walk + setup ~=
+      # 15.5-16.5min -> the run dies mid-detail-phase, writes nothing, and
+      # refetches the same URLs hourly forever). 90 x 4s = 360s sleeps +
+      # ~72s latency + ~30s sitemaps + setup ~= 9-10min; cold-start 1,474
+      # URLs converge in ~17 hourly runs (<1 day). Set both together when
+      # retuning.
       TRAKSTAR_DETAIL_PACING_MS: '4000'
-      TRAKSTAR_DETAIL_BUDGET: '180'
+      TRAKSTAR_DETAIL_BUDGET: '90'
 
     steps:
       - name: Checkout repository
