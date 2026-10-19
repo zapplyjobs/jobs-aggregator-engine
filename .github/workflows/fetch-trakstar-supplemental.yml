@@ -1,0 +1,108 @@
+# Trakstar Hire supplemental lane (AGG-PLATFORM-EXPANSION-GO-1, PIPE-20 steps
+# 3-5, A315 build 2026-10-19). Producer: fetch-supplemental-trakstar.js
+# (sitemap enumeration + JobPosting JSON-LD details, jazzhr-lane mirror).
+#
+# Trigger: hourly GHA schedule (Workflow Trigger Policy option 1). Worker
+# dual-trigger rider DECLINED by ruling (INF-1032 B0, scheduler-call class) -
+# do not add one.
+name: Fetch Trakstar Supplemental
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '53 * * * *'  # hourly GHA schedule (Workflow Trigger Policy option 1; unused offset). Trakstar supply is slow-moving engineering volume; seen-set diff + 180/run detail budget converges in ~2-3 days from cold.
+concurrency:
+  group: fetch-trakstar-supplemental
+  cancel-in-progress: false
+
+jobs:
+  fetch-trakstar-supplemental:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      NODE_OPTIONS: --max-old-space-size=4096
+      # Packet s4 sub-threshold detail pacing (no tarpit observed on the
+      # platform, same-class prudence as JazzHR); 4s x 180 = 720s detail
+      # phase + ~1min sitemap walk + seed/upload headroom fits the 15-min
+      # timeout. Producer derives budget from pace when TRAKSTAR_DETAIL_BUDGET
+      # is unset (720000/4000 = 180) - set both together when retuning.
+      TRAKSTAR_DETAIL_PACING_MS: '4000'
+      TRAKSTAR_DETAIL_BUDGET: '180'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 1
+          submodules: recursive
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Install transcrypt
+        run: |
+          curl -sSL https://raw.githubusercontent.com/elasticdog/transcrypt/5effa13/transcrypt -o /tmp/transcrypt
+          chmod +x /tmp/transcrypt
+          sudo mv /tmp/transcrypt /usr/local/bin/transcrypt
+
+      - name: Unlock encrypted files
+        run: |
+          echo "Y" | transcrypt --cipher aes-256-cbc --password "$TRANSCRYPT_PASSWORD" --force
+          git checkout -- .
+          git submodule foreach --recursive '
+            echo "Y" | transcrypt --cipher aes-256-cbc --password "'"$TRANSCRYPT_PASSWORD"'" --force 2>/dev/null || true
+            rm -f "$(git rev-parse --git-dir)/index" 2>/dev/null || true
+            git checkout HEAD -- . 2>/dev/null || true
+          ' || true
+        env:
+          TRANSCRYPT_PASSWORD: ${{ secrets.TRANSCRYPT_PASSWORD }}
+
+      - name: Fix submodule index
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --force --recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create data directory
+        run: mkdir -p .github/data
+
+      - name: Seed Trakstar lane state from R2
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: |
+          node -e "
+          const { createR2Client } = require('./.github/scripts/aggregator/lib/storage/r2-client');
+          async function downloadMaybe(r2, key, file) {
+            const result = await r2.downloadToFile(key, file);
+            console.log((result ? 'R2_OK' : 'R2_MISS') + ' ' + key);
+          }
+          (async () => {
+            const r2 = createR2Client({ prefix: 'data/' });
+            await downloadMaybe(r2, 'trakstar-lane-state.json', '.github/data/trakstar-lane-state.json');
+            await downloadMaybe(r2, 'supplemental-trakstar-jobs.json', '.github/data/supplemental-trakstar-jobs.json');
+            await downloadMaybe(r2, 'supplemental-trakstar-metadata.json', '.github/data/supplemental-trakstar-metadata.json');
+          })().catch(e => { console.error('seed failed', e.message); process.exit(1); });
+          "
+
+      - name: Fetch Trakstar jobs
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: node .github/scripts/fetch-supplemental-trakstar.js
