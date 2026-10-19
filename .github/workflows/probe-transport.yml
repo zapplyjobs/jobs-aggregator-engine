@@ -1,0 +1,54 @@
+name: Probe Family Transport (throwaway)
+# THROWAWAY transport probe for AGG expansion legs (Trakstar / JazzHR-feed / ADP).
+# Probes candidate-family doors from a REAL GitHub-runner context - the exact
+# context class where JazzHR detail fetches were rejected 100pct (missing_jsonld).
+# Delete this branch after the run; never merge.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Transport matrix probe
+        shell: bash
+        run: |
+          set -u
+          UA="ZapplySupplyEval/1.0 (+zapply.jobs)"
+          probe () {
+            local label="$1"; shift
+            local url="$1"; shift
+            local body; body=$(mktemp)
+            local code rc size marker
+            code=$(curl -sS -o "$body" -w '%{http_code}' -A "$UA" --max-time 25 "$url" 2>/tmp/curlerr); rc=$?
+            if [ $rc -ne 0 ]; then
+              echo "$label CURL_RC=$rc ERR=$(tail -c 120 /tmp/curlerr | tr '\n' ' ')"
+              rm -f "$body"; sleep 3; return
+            fi
+            size=$(wc -c < "$body")
+            marker="-"
+            grep -q "JobPosting" "$body" && marker="JSONLD"
+            grep -q "jobRequisitions" "$body" && marker="ADPJSON"
+            grep -q "<urlset" "$body" && marker="XMLFEED"
+            grep -q "data-href" "$body" && marker="${marker}+LISTING"
+            grep -qi "cloudflare\|challenge\|captcha\|access denied" "$body" && marker="${marker}+BLOCKPAGE"
+            echo "$label HTTP=$code BYTES=$size MARKER=$marker"
+            rm -f "$body"; sleep 3
+          }
+          echo "=== Trakstar (hire.trakstar.com) ==="
+          probe trakstar-listing-planate  "https://planate.hire.trakstar.com/jobs/"
+          probe trakstar-sitemap-planate  "https://planate.hire.trakstar.com/sitemap.xml"
+          probe trakstar-detail-eciusa    "https://eciusa.hire.trakstar.com/jobs/fk0zlye"
+          probe trakstar-listing-moengage "https://moengage.hire.trakstar.com/jobs/"
+          echo "=== JazzHR (applytojob.com + feed) ==="
+          probe jazzhr-feed-shard0        "http://app.jazz.co/feeds/google/xml/0"
+          probe jazzhr-listing-roush      "https://roush.applytojob.com/"
+          probe jazzhr-detail-roush       "https://roush.applytojob.com/apply/Vez4U6K07Z/Automotive-Mechanic-Senior"
+          echo "=== ADP Workforce Now (keyless API) ==="
+          probe adp-api-cid1              "https://workforcenow.adp.com/mascsr/default/careercenter/public/events/staffing/v1/job-requisitions?cid=d5856577-2c4f-400c-bcf3-4f80afedad61&lang=en-US&locale=en_US"
+          probe adp-api-cid2              "https://workforcenow.adp.com/mascsr/default/careercenter/public/events/staffing/v1/job-requisitions?cid=07299349-a3c4-4907-95a8-134329e452f8&lang=en-US&locale=en_US"
+          echo "=== probe done ==="
