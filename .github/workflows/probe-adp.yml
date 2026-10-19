@@ -7,6 +7,9 @@ name: Probe ADP Pre-probe (throwaway)
 # Delete from main after the run; never merge. Branch agg/adp-preprobe-20261019 = audit copy.
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/probe-adp.yml']
 
 permissions:
   contents: read
