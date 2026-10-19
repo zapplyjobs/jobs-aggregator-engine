@@ -1,0 +1,174 @@
+name: Probe ADP Pre-probe (throwaway)
+# THROWAWAY pre-probe for the ADP Workforce Now expansion leg (PIPE-20 step 2).
+# Read-only GET probes: per-cid true totals (meta.totalNumber), row field shapes,
+# detail-door (itemID), description shape, robots.txt. Vehicle pattern: probe-transport.yml (A315).
+# Reviewer fixes applied (PASS-WITH-FIXES): 10s timeouts, null-total bucket, response
+# headers on non-200, final-URL evidence, quoted ids, door-skipped marker, raw-row dump.
+# Delete from main after the run; never merge. Branch agg/adp-preprobe-20261019 = audit copy.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: ADP census re-probe + door spec
+        shell: bash
+        run: |
+          set -u
+          python3 - <<'PYEOF'
+          import json, time, urllib.request, urllib.error, urllib.parse
+
+          UA = "ZapplySupplyEval/1.0 (+zapply.jobs)"
+          BASE = "https://workforcenow.adp.com/mascsr/default/careercenter/public/events/staffing/v1/job-requisitions"
+          CIDS = [
+              "d5856577-2c4f-400c-bcf3-4f80afedad61",  # census_jobs=136
+              "07299349-a3c4-4907-95a8-134329e452f8",  # census_jobs=75
+              "60e64b1d-9c08-400e-99a0-70f210319f28",  # census_jobs=72
+              "0154ae68-ab52-434c-afbd-28d2d498db37",  # census_jobs=57
+              "15dc44c7-eab3-4503-a1bc-a66382fbd1f7",  # census_jobs=46 Robinson Clinics
+              "90ee0c52-4563-4bbb-a44d-0a6cd6964c61",  # census_jobs=35
+              "2cc1abe5-fdf4-41ed-b82d-9b34c651ef79",  # census_jobs=32
+              "dd2210b0-7dc9-4b51-8524-cabc28981ada",  # census_jobs=26
+              "16ed56fa-3af7-47fc-878a-c4d47df49e2f",  # census_jobs=24
+              "32f45058-ce08-45f5-b35e-964951a170b1",  # census_jobs=22
+              "0ec0c5a4-f3ba-4be4-be2b-5d725d77f8ed",  # census_jobs=21
+              "76e8db77-8697-4237-901d-62d116ea4f52",  # census_jobs=20
+              "41a778b2-3a5e-42c7-9770-87f62458fb3e",  # census_jobs=14
+              "7fe1bff2-72e1-4130-8864-60f259b40f33",  # census_jobs=13
+              "6a23fca3-7b64-4140-a007-d213cba67288",  # census_jobs=12
+              "1c4f1a20-df3f-4cd6-aa97-5b35b14125af",  # census_jobs=11
+              "6eee909a-799e-42a2-971e-30ee0eca1d61",  # census_jobs=11
+              "32d20f5d-2c2c-4959-b573-a711936d5940",  # census_jobs=10
+              "cbc61a9e-850d-4133-ba7a-16f730256632",  # census_jobs=9
+              "1827fbab-35b1-45c9-8ea9-65fca03eb2a6",  # census_jobs=5
+              "d33f3f31-743f-48fe-bcc9-d83c20f00331",  # census_jobs=4
+              "467308fd-e8b6-4f5a-923b-caf453c89c75",  # census_jobs=2
+              "a881ce66-b55e-4a20-9da2-6ff1d62fe767",  # census_jobs=1
+              "19312288-6bc0-4eeb-9562-93d08ce7dc21",  # census_jobs= (null-total class)
+              "2adef00e-4618-44da-ab3e-8e44860b9492",  # census_jobs= (null-total class)
+              "39250692-f8db-4dff-a3e2-660b31eb4758",  # census_jobs= (null-total class)
+              "77fce890-2a35-46d7-92ae-51a4af9b37f5",  # census_jobs= (null-total class)
+              "7eaf69cc-a235-4c24-906d-859254012d02",  # census_jobs= (null-total class)
+              "b965dec1-e12b-4ad0-a33a-a578a3f125cf",  # census_jobs= (null-total class)
+              "faa94825-da86-4895-b462-ba62627d3e78",  # census_jobs= (null-total class)
+          ]
+
+          HDR_KEYS = ("server", "content-type", "cf-mitigated", "retry-after", "x-cache", "location")
+
+
+          def get(url, timeout=10):
+              req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
+              try:
+                  with urllib.request.urlopen(req, timeout=timeout) as r:
+                      hdrs = {k: r.headers.get(k) for k in HDR_KEYS if r.headers.get(k)}
+                      return r.status, r.read(), r.geturl(), hdrs
+              except urllib.error.HTTPError as e:
+                  hdrs = {k: e.headers.get(k) if e.headers else None for k in HDR_KEYS}
+                  hdrs = {k: v for k, v in hdrs.items() if v}
+                  return e.code, e.read(), url, hdrs
+              except Exception as e:
+                  return -1, str(e).encode()[:200], url, {}
+
+
+          results = []
+          for cid in CIDS:
+              url = f"{BASE}?cid={cid}&lang=en-US&locale=en_US"
+              code, body, furl, hdrs = get(url)
+              rec = {"cid": cid, "http": code, "bytes": len(body)}
+              if code != 200:
+                  rec["resp_headers"] = hdrs
+                  rec["body_head"] = body[:120].decode("utf-8", "replace")
+              else:
+                  try:
+                      d = json.loads(body)
+                      rec["total"] = (d.get("meta") or {}).get("totalNumber")
+                      rows = d.get("jobRequisitions") or []
+                      rec["page_rows"] = len(rows)
+                      if rows:
+                          r0 = rows[0]
+
+                          def tname(r):
+                              t = r.get("requisitionTitle")
+                              if isinstance(t, dict):
+                                  return t.get("name") or ""
+                              return t if isinstance(t, str) else ""
+
+                          rec["row_keys"] = sorted(r0.keys())
+                          rec["sample_title"] = tname(r0)
+                          rec["titles_nonempty"] = sum(1 for r in rows if tname(r))
+                          rec["sample_postDate"] = r0.get("postDate")
+                          locs = r0.get("requisitionLocations")
+                          if isinstance(locs, list) and locs:
+                              rec["loc_shape"] = json.dumps(locs[0])[:220]
+                          ous = r0.get("organizationalUnits")
+                          if isinstance(ous, list) and ous:
+                              rec["ou_shape"] = json.dumps(ous[0])[:150]
+                          rec["id_fields"] = {k: v[:40] for k, v in
+                                              ((k, r0.get(k)) for k in ("itemID", "clientRequisitionID", "id", "requisitionId"))
+                                              if isinstance(v, str) and v}
+                          rec["id_field_types"] = {k: type(r0[k]).__name__ for k in
+                                                   ("itemID", "clientRequisitionID", "id", "requisitionId") if k in r0}
+                          nonempty_links = [r.get("links") for r in rows if r.get("links")]
+                          if nonempty_links:
+                              rec["links_shape"] = json.dumps(nonempty_links[0])[:300]
+                          rec["titles_sample"] = [tname(r)[:60] for r in rows[:20]]
+                          if cid == CIDS[0]:
+                              print("ADPRAWROW " + json.dumps(r0, default=str)[:900], flush=True)
+                  except Exception as e:
+                      rec["parse_error"] = str(e)[:120]
+              print("ADPPROBE " + json.dumps(rec), flush=True)
+              results.append(rec)
+              time.sleep(1.1)
+
+          live = [r for r in results if r.get("http") == 200 and r.get("total") is not None]
+          print("ADPSUMMARY " + json.dumps({
+              "cids_probed": len(CIDS),
+              "cids_ok": len(live),
+              "sum_total_raw": sum(r["total"] or 0 for r in live),
+              "dead_cids": [r["cid"] for r in results if r["http"] != 200],
+              "cids_null_total": [r["cid"] for r in results if r.get("http") == 200 and r.get("total") is None],
+              "cids_zero_total": [r["cid"] for r in live if not r["total"]],
+          }), flush=True)
+
+          # Detail-door probes on the first live cid carrying plain-string id fields
+          door_found = False
+          for r in results:
+              if r.get("id_fields"):
+                  door_found = True
+                  cid = r["cid"]
+                  for key, val in r["id_fields"].items():
+                      durl = f"{BASE}/{urllib.parse.quote(val, safe='')}?cid={cid}&lang=en-US&locale=en_US"
+                      dcode, dbody, dfurl, dhdrs = get(durl)
+                      rec = {"detail_probe": key, "cid": cid, "id": val[:30], "http": dcode,
+                             "bytes": len(dbody), "final_url_tail": dfurl.rsplit("/", 1)[-1][:60]}
+                      if dcode != 200:
+                          rec["resp_headers"] = dhdrs
+                      else:
+                          try:
+                              dd = json.loads(dbody)
+                              if isinstance(dd, dict):
+                                  rec["detail_keys"] = sorted(dd.keys())[:25]
+                                  rec["desc_key_hits"] = [k for k in dd.keys() if "esc" in k.lower()]
+                                  desc = dd.get("requisitionDescription")
+                                  if desc is not None:
+                                      rec["desc_shape"] = json.dumps(desc, default=str)[:350]
+                          except Exception:
+                              rec["parse_error"] = "non-json"
+                      print("ADPDETAIL " + json.dumps(rec), flush=True)
+                      time.sleep(1.5)
+                  break
+          if not door_found:
+              print("ADPDOOR SKIPPED no_live_cid_with_string_id_fields", flush=True)
+
+          code, body, furl, hdrs = get("https://workforcenow.adp.com/robots.txt")
+          print("ADPROBOTS HTTP=" + str(code) + " BYTES=" + str(len(body)) +
+                " FINAL_URL=" + furl + " CT=" + str(hdrs.get("content-type")), flush=True)
+          print(body[:400].decode("utf-8", "replace"), flush=True)
+          print("=== probe done ===", flush=True)
+
+          PYEOF
