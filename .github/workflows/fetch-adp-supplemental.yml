@@ -1,0 +1,110 @@
+# ADP Workforce Now supplemental lane (AGG-PLATFORM-EXPANSION-GO-1, PIPE-20
+# steps 3-5, ADP leg build 2026-10-21). Producer: fetch-supplemental-adp.js
+# (OData $top/$skip JSON listing walk + itemID detail doors, trakstar-lane
+# mirror).
+#
+# Trigger: hourly GHA schedule (Workflow Trigger Policy option 1). Worker
+# dual-trigger rider DECLINED by ruling (INF-1032 B0, scheduler-call class) -
+# do not add one.
+name: Fetch ADP Supplemental
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '37 * * * *'  # hourly GHA schedule (Workflow Trigger Policy option 1). Minute 37 is DISTINCT from the other lanes (trakstar 11, phenom+jobvite 23, jazzhr 41) and off the refresh grids (5/20/35/50, 8/23/38/53, */10, */15); never 53 (trakstar review lesson - the minute carries refresh-tag-aspect). ADP supply ~614 rows over 24 live boards; seen-set diff + 90/run detail budget converges in ~7 hourly runs from cold.
+concurrency:
+  group: fetch-adp-supplemental
+  cancel-in-progress: false
+
+jobs:
+  fetch-adp-supplemental:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      NODE_OPTIONS: --max-old-space-size=4096
+      # Trakstar review P1 lesson applied at build (not post-review): budget 90
+      # at 4000ms pacing = 360s sleeps + ~72s latency + ~100s listing walk
+      # (44 pages over 24 boards) + setup ~= 9-10min, inside the 15-min job
+      # timeout with cold-start margin (trakstar's derived 180 died
+      # mid-detail-phase once per-fetch latency was counted). Set both
+      # together when retuning.
+      ADP_DETAIL_PACING_MS: '4000'
+      ADP_DETAIL_BUDGET: '90'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 1
+          submodules: recursive
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Install transcrypt
+        run: |
+          curl -sSL https://raw.githubusercontent.com/elasticdog/transcrypt/5effa13/transcrypt -o /tmp/transcrypt
+          chmod +x /tmp/transcrypt
+          sudo mv /tmp/transcrypt /usr/local/bin/transcrypt
+
+      - name: Unlock encrypted files
+        run: |
+          echo "Y" | transcrypt --cipher aes-256-cbc --password "$TRANSCRYPT_PASSWORD" --force
+          git checkout -- .
+          git submodule foreach --recursive '
+            echo "Y" | transcrypt --cipher aes-256-cbc --password "'"$TRANSCRYPT_PASSWORD"'" --force 2>/dev/null || true
+            rm -f "$(git rev-parse --git-dir)/index" 2>/dev/null || true
+            git checkout HEAD -- . 2>/dev/null || true
+          ' || true
+        env:
+          TRANSCRYPT_PASSWORD: ${{ secrets.TRANSCRYPT_PASSWORD }}
+
+      - name: Fix submodule index
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --force --recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create data directory
+        run: mkdir -p .github/data
+
+      - name: Seed ADP lane state from R2
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: |
+          node -e "
+          const { createR2Client } = require('./.github/scripts/aggregator/lib/storage/r2-client');
+          async function downloadMaybe(r2, key, file) {
+            const result = await r2.downloadToFile(key, file);
+            console.log((result ? 'R2_OK' : 'R2_MISS') + ' ' + key);
+          }
+          (async () => {
+            const r2 = createR2Client({ prefix: 'data/' });
+            await downloadMaybe(r2, 'adp-lane-state.json', '.github/data/adp-lane-state.json');
+            await downloadMaybe(r2, 'supplemental-adp-jobs.json', '.github/data/supplemental-adp-jobs.json');
+            await downloadMaybe(r2, 'supplemental-adp-metadata.json', '.github/data/supplemental-adp-metadata.json');
+          })().catch(e => { console.error('seed failed', e.message); process.exit(1); });
+          "
+
+      - name: Fetch ADP jobs
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: node .github/scripts/fetch-supplemental-adp.js
