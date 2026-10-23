@@ -591,7 +591,7 @@ jobs:
       run: |
         STATUS=complete
         if [ "${{ steps.upload_pipeline_data.outcome }}" != "success" ]; then STATUS=failed; fi
-        ORACLE_LINES=$(wc -l < .github/data/descriptions-oracle.jsonl 2>/dev/null || echo 0)
+        ORACLE_LINES=$(cat .github/data/descriptions-oracle*.jsonl 2>/dev/null | wc -l) # AGG-ORACLE-SIDECAR-CHUNK-1: count across the chunk set, not the single name
         COMPLETED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
         # AGG-MARKER-STORAGE-RETRY-1: R2 first (fatal, only reader path) — Storage backup
         echo "{\"sidecars_written_at\":\"${COMPLETED_AT}\",\"oracle_entries\":${ORACLE_LINES},\"status\":\"${STATUS}\",\"run_id\":\"${GITHUB_RUN_ID}\",\"updated_at\":\"${COMPLETED_AT}\"}" > /tmp/fetch-jobs-sidecar-complete.json

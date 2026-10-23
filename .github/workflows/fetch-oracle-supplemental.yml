@@ -81,25 +81,40 @@ jobs:
           async function main() {
             const r2 = createR2Client({ prefix: 'data/' });
             let seededSidecar = false;
+            let countMismatch = null;
             try {
               const remote = await r2.list('descriptions-oracle');
               for (const name of fs.readdirSync('.github/data')) {
                 if (SIDECAR_RE.test(name)) fs.rmSync('.github/data/' + name, { force: true });
               }
+              // AGG-ORACLE-SIDECAR-CHUNK-1 (OracleChunkReview F2): all-or-nothing seed.
+              // A partial seed merged + republished would silently drop the missing
+              // chunk's rows from the live set (the R2LOSS-1 class). downloadToFile never
+              // throws (logs + returns null), so count successes vs listed keys and hard-fail
+              // on any gap; the next cron run retries from a clean slate (partial-list guard
+              // semantics). Count mismatch fails the STEP (the swallow below was removed).
+              let expected = 0, got = 0;
               for (const o of remote) {
                 const short = String(o.key || '').replace(/^data\//, '');
                 if (!SIDECAR_RE.test(short)) continue;
-                await downloadMaybe(r2, short, '.github/data/' + short);
+                expected++;
+                const r = await downloadMaybe(r2, short, '.github/data/' + short);
+                if (r) got++;
+              }
+              if (expected > 0 && got !== expected) {
+                countMismatch = got + '/' + expected;
+              } else if (expected > 0) {
                 seededSidecar = true;
               }
             } catch (e) {
               console.log('sidecar set seed unavailable (' + e.message + ') - falling back to single-name seed');
             }
+            if (countMismatch) throw new Error('oracle sidecar seed incomplete: downloaded ' + countMismatch + ' listed chunks - refusing to run the lane on a partial cache (R2LOSS-1 guard)');
             if (!seededSidecar) await downloadMaybe(r2, 'descriptions-oracle.jsonl', '.github/data/descriptions-oracle.jsonl');
             await downloadMaybe(r2, 'supplemental-oracle-metadata.json', '.github/data/supplemental-oracle-metadata.json'); // AGG-ORACLE-SIDECAR-BIMODAL-1: prior total for the partial-list guard
           }
-          main().catch(() => process.exit(1));
-          " && echo "✅ Seeded Oracle cache/snapshot" || echo "⚠️ Oracle R2 seed incomplete"
+          main().catch((e) => { console.error('❌ seed failed:', e.message); process.exit(1); });
+          " && echo "✅ Seeded Oracle cache/snapshot"
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
