@@ -73,9 +73,29 @@ jobs:
             const result = await r2.downloadToFile(key, file);
             console.log((result ? 'R2_OK' : 'R2_MISS') + ' ' + key);
           }
+          // AGG-ORACLE-SIDECAR-CHUNK-1: the sidecar may be a single file OR N chunks
+          // (descriptions-oracle[-N].jsonl) - seed the live SET from the R2 listing, never
+          // assume the single-file name. Stale local sidecars are removed so the lane's
+          // merge seed matches the remote truth.
+          const SIDECAR_RE = /^descriptions-oracle(-\d+)?\.jsonl$/;
           async function main() {
             const r2 = createR2Client({ prefix: 'data/' });
-            await downloadMaybe(r2, 'descriptions-oracle.jsonl', '.github/data/descriptions-oracle.jsonl');
+            let seededSidecar = false;
+            try {
+              const remote = await r2.list('descriptions-oracle');
+              for (const name of fs.readdirSync('.github/data')) {
+                if (SIDECAR_RE.test(name)) fs.rmSync('.github/data/' + name, { force: true });
+              }
+              for (const o of remote) {
+                const short = String(o.key || '').replace(/^data\//, '');
+                if (!SIDECAR_RE.test(short)) continue;
+                await downloadMaybe(r2, short, '.github/data/' + short);
+                seededSidecar = true;
+              }
+            } catch (e) {
+              console.log('sidecar set seed unavailable (' + e.message + ') - falling back to single-name seed');
+            }
+            if (!seededSidecar) await downloadMaybe(r2, 'descriptions-oracle.jsonl', '.github/data/descriptions-oracle.jsonl');
             await downloadMaybe(r2, 'supplemental-oracle-metadata.json', '.github/data/supplemental-oracle-metadata.json'); // AGG-ORACLE-SIDECAR-BIMODAL-1: prior total for the partial-list guard
           }
           main().catch(() => process.exit(1));
