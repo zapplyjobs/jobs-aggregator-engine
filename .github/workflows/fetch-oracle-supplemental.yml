@@ -72,6 +72,7 @@ jobs:
           async function downloadMaybe(r2, key, file) {
             const result = await r2.downloadToFile(key, file);
             console.log((result ? 'R2_OK' : 'R2_MISS') + ' ' + key);
+            return result; // AGG-ORACLE-SIDECAR-CHUNK-1 (F2): the all-or-nothing count reads this
           }
           // AGG-ORACLE-SIDECAR-CHUNK-1: the sidecar may be a single file OR N chunks
           // (descriptions-oracle[-N].jsonl) - seed the live SET from the R2 listing, never
