@@ -15,8 +15,8 @@ Env: GH_TOKEN (or GITHUB_TOKEN), R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
 import json, os, subprocess, sys, datetime
 
 NOW = datetime.datetime.now(datetime.timezone.utc)
-AGG_REPO = "zapplyjobs/jobs-aggregator-private"
-AGG_REPOS = ["zapplyjobs/jobs-aggregator-private", "zapplyjobs/job-board-aggregator"]
+AGG_REPO = "zapplyjobs/jobs-aggregator-engine"
+AGG_REPOS = ["zapplyjobs/jobs-aggregator-engine", "zapplyjobs/job-board-aggregator"]
 PROXY = os.environ.get("ASPECT_PROXY", "https://zjp-data-proxy.wild-queen-069e.workers.dev/data")
 
 def gh_json(args):
