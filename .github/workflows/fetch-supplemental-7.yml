@@ -3,7 +3,7 @@ name: Supplemental Ingest 7
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */2 * * *'  # GHA FALLBACK only (AGG-SLOW-LANE-1); PRIMARY = CF Worker dispatch ~every 10 min (observed 2026-09-06) per INF_CONTRACT cron governance
+    - cron: '0 */2 * * *'
 
 concurrency:
   group: fetch-custom-supplemental
@@ -66,8 +66,6 @@ jobs:
       - name: Create data directory
         run: mkdir -p .github/data
 
-      # AGG-SB-SIDECAR-CHUNK-1: list-driven seed (chunk-aware) — extracted per
-      # AGG-SEEDSTEP-EXTRACT-1; replaces the fixed single-name loop.
       - name: Seed description sidecars from R2
         run: node .github/scripts/seed-custom-sidecars.js
         env:
@@ -128,7 +126,7 @@ jobs:
           meta = json.load(open('.github/data/supplemental-custom-metadata.json'))
           assert isinstance(jobs, list)
           assert meta.get('source') == 'custom'
-          assert meta.get('schema') in ('supplemental-lane-v1', 'supplemental-lane-v2')  # v2 = AGG-LANE-SCHEMA-CONTRACT-1
+          assert meta.get('schema') in ('supplemental-lane-v1', 'supplemental-lane-v2')
           assert meta.get('lane_name') == 'custom'
           contract = meta.get('publish_contract') or {}
           assert contract.get('blocks_fast_publish') is False
@@ -171,7 +169,7 @@ jobs:
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
 
       - name: "Dual-write to Supabase Storage (R2-elim)"
-        if: always()  # INF-R2ELIM-CASCADE-MISS-1: must run even when fetch script fails on R2 publish (bucket deleted) — local files exist before R2 crash
+        if: always()
         continue-on-error: true
         run: |
           BASE="https://xxmhgagpbxjflajoaahy.supabase.co/storage/v1/object/pipeline-data"

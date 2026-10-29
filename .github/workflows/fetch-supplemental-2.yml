@@ -3,7 +3,7 @@ name: Supplemental Ingest 2
 on:
   workflow_dispatch:
   schedule:
-    - cron: '41 * * * *'  # hourly GHA self-trigger (Workflow Trigger Policy option 1). JazzHR supply is slow-moving SMB/industrial volume; seen-set diff + 250/run detail budget converges in ~2-3 days from cold. Worker dual-trigger rider to INF (AGG-FAMWORK-WORKERRIDER-1 pattern).
+    - cron: '41 * * * *'
 concurrency:
   group: fetch-jazzhr-supplemental
   cancel-in-progress: false
@@ -19,9 +19,7 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       NODE_OPTIONS: --max-old-space-size=4096
-      # AGG-JAZZHR-DETAILJSONLD-REJECT-1: sub-threshold detail pacing (rate-shell
       # class measured 2026-10-10); 70s x 10 fits the 15-min timeout. Producer
-      # derives budget from pace when JAZZHR_DETAIL_BUDGET is unset - set both
       # together when retuning.
       JAZZHR_DETAIL_PACING_MS: '70000'
       JAZZHR_DETAIL_BUDGET: '10'

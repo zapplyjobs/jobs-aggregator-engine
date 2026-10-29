@@ -1,17 +1,12 @@
-# ADP Workforce Now supplemental lane (AGG-PLATFORM-EXPANSION-GO-1, PIPE-20
-# steps 3-5, ADP leg build 2026-10-21). Producer: fetch-supplemental-adp.js
-# (OData $top/$skip JSON listing walk + itemID detail doors, trakstar-lane
-# mirror).
 #
 # Trigger: hourly GHA schedule (Workflow Trigger Policy option 1). Worker
-# dual-trigger rider DECLINED by ruling (INF-1032 B0, scheduler-call class) -
 # do not add one.
 name: Supplemental Ingest 1
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '37 * * * *'  # hourly GHA schedule (Workflow Trigger Policy option 1). Minute 37 is DISTINCT from the other lanes (trakstar 11, phenom+jobvite 23, jazzhr 41) and off the refresh grids (5/20/35/50, 8/23/38/53, */10, */15); never 53 (trakstar review lesson - the minute carries refresh-tag-aspect). ADP supply ~614 rows over 24 live boards; seen-set diff + 90/run detail budget converges in ~7 hourly runs from cold.
+    - cron: '37 * * * *'
 concurrency:
   group: fetch-adp-supplemental
   cancel-in-progress: false
@@ -27,9 +22,6 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       NODE_OPTIONS: --max-old-space-size=4096
-      # Trakstar review P1 lesson applied at build (not post-review): budget 90
-      # at 4000ms pacing = 360s sleeps + ~72s latency + ~100s listing walk
-      # (44 pages over 24 boards) + setup ~= 9-10min, inside the 15-min job
       # timeout with cold-start margin (trakstar's derived 180 died
       # mid-detail-phase once per-fetch latency was counted). Set both
       # together when retuning.

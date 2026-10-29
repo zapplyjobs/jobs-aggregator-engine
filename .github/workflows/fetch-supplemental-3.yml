@@ -3,7 +3,7 @@ name: Supplemental Ingest 3
 on:
   workflow_dispatch:
   schedule:
-    - cron: '23 * * * *'  # hourly GHA self-trigger (Workflow Trigger Policy option 1). Jobvite supply is slow-moving retail/mid-employer volume; sitemap diff + 250/run detail budget converges in ~2 days from cold. Worker dual-trigger rider filed to INF (AGG-FAMWORK-WORKERRIDER-1).
+    - cron: '23 * * * *'
 concurrency:
   group: fetch-jobvite-supplemental
   cancel-in-progress: false
@@ -19,9 +19,6 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       NODE_OPTIONS: --max-old-space-size=4096
-      # A303 (AGG-JOBVITE-DETAILFAIL-FIX-1 item c): this lane reads ITS OWN env
-      # names now (the producer historically read PHENOM_DETAIL_BUDGET, silently
-      # coupling the two lanes' budgets). Floor 8 x 29 tenants ~= the 250 budget.
       JOBVITE_DETAIL_BUDGET: '250'
       JOBVITE_DETAIL_FLOOR: '8'
 

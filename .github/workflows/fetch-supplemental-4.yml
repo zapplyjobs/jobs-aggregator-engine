@@ -3,7 +3,7 @@ name: Supplemental Ingest 4
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/15 * * * *'  # GHA FALLBACK (AGG-ORACLE-DESC-1; external dispatcher stopped 2026-07-12). PRIMARY = CF Worker dispatch ~every 10-15 min (observed 2026-09-06).
+    - cron: '*/15 * * * *'
 concurrency:
   group: fetch-oracle-supplemental
   cancel-in-progress: false
@@ -142,7 +142,7 @@ jobs:
           assert isinstance(jobs, list)
           assert isinstance(meta.get('jobs_fetched'), int)
           assert meta.get('source') == 'oracle'
-          assert meta.get('schema') in ('supplemental-lane-v1', 'supplemental-lane-v2')  # v2 = AGG-LANE-SCHEMA-CONTRACT-1; AGG-ORACESUPP-VERIFYFAIL-1: the v2 migration updated the custom lane's verify but missed this one, so the producer (writing v2 since 09-04) failed its own verify before the R2 upload every run
+          assert meta.get('schema') in ('supplemental-lane-v1', 'supplemental-lane-v2')
           assert meta.get('lane_name') == 'oracle'
           contract = meta.get('publish_contract') or {}
           assert contract.get('blocks_fast_publish') is False
@@ -160,7 +160,7 @@ jobs:
 
 
       - name: "Dual-write to Supabase Storage (R2-elim)"
-        if: always()  # INF-R2ELIM-CASCADE-MISS-1: must run even when fetch script fails on R2 publish (bucket deleted) — local files exist before R2 crash
+        if: always()
         continue-on-error: true
         run: |
           BASE="https://xxmhgagpbxjflajoaahy.supabase.co/storage/v1/object/pipeline-data"
