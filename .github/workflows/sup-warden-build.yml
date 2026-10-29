@@ -1,0 +1,106 @@
+name: SUP Warden Queue Build
+on:
+  schedule:
+    # Daily 07:25Z — off the documented fleet collision grid (lanes :11/:23/:37/:41,
+    # refresh 5/20/35/50 + 8/23/38/53 + */10 + */15; ":53 never"). After the 06:00Z
+    # decay-monitor publish (warden's 48h monitor gate computes off its generated_at).
+    - cron: '25 7 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: warden-queue-build
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout (submodules incl. aggregator company-list + the vendored warden kit)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Install transcrypt (vendored action, INF-TRANSCRYPT-ACTION-1)
+        uses: zapplyjobs/.github/actions/setup-transcrypt@afcb5f41ec28fe10cefcf421fc455d0d89588b1f
+
+      - name: Unlock encrypted files + ciphertext verify (INF-TRANSCRYPT-KEY-BACKUP-1)
+        run: |
+          echo "Y" | transcrypt --cipher aes-256-cbc --password "$TRANSCRYPT_PASSWORD" --force
+          git submodule foreach --recursive '
+            echo "Y" | transcrypt --cipher aes-256-cbc --password "$TRANSCRYPT_PASSWORD" --force 2>/dev/null || true
+          ' || true
+          file -b .github/scripts/aggregator/lib/fetchers/company-list.json | grep -q "JSON" || (echo "::error::company-list still ciphertext" && exit 1)
+        env:
+          TRANSCRYPT_PASSWORD: ${{ secrets.TRANSCRYPT_PASSWORD }}
+
+      - name: Materialize warden R2 env file
+        run: |
+          mkdir -p ~/.secrets
+          {
+            echo "export R2_ACCESS_KEY_ID='$R2_ACCESS_KEY_ID'"
+            echo "export R2_SECRET_ACCESS_KEY='$R2_SECRET_ACCESS_KEY'"
+            echo "export R2_ENDPOINT='$R2_ENDPOINT'"
+            echo "export R2_BUCKET_NAME='$R2_BUCKET_NAME'"
+          } > ~/.secrets/r2-zjp.env
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+
+      - name: Download previous silent-state from R2 (rolling snapshot; age honesty)
+        continue-on-error: true
+        run: |
+          pip install boto3 -q
+          python3 -c "import boto3, os; s3 = boto3.client('s3', region_name='auto', endpoint_url=os.environ['R2_ENDPOINT'], aws_access_key_id=os.environ['R2_ACCESS_KEY_ID'], aws_secret_access_key=os.environ['R2_SECRET_ACCESS_KEY']); s3.download_file(os.environ['R2_BUCKET_NAME'], 'data/warden_silent_state.json', 'warden_silent_state.json'); print('previous silent state downloaded')"
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+
+      - name: Build the warden triage queue (no filing - sessions file from the R2 artifact)
+        run: |
+          pip install boto3 -q
+          export WARDEN_LIST_PATH="$GITHUB_WORKSPACE/.github/scripts/aggregator/lib/fetchers/company-list.json"
+          export WARDEN_ARTIFACT="$GITHUB_WORKSPACE/warden_triage_queue.json"
+          export WARDEN_SILENT_STATE="$GITHUB_WORKSPACE/warden_silent_state.json"
+          export WARDEN_SECRETS="$HOME/.secrets/r2-zjp.env"
+          python3 .github/scripts/warden/warden_queue.py build
+
+      - name: Upload silent state to R2 (rolling snapshot for next run)
+        run: |
+          python3 - <<'PYEOF'
+          import boto3, os
+          s3 = boto3.client('s3',
+              endpoint_url=os.environ['R2_ENDPOINT'],
+              aws_access_key_id=os.environ['R2_ACCESS_KEY_ID'],
+              aws_secret_access_key=os.environ['R2_SECRET_ACCESS_KEY'])
+          s3.put_object(Bucket=os.environ['R2_BUCKET_NAME'], Key='data/warden_silent_state.json',
+                        Body=open('warden_silent_state.json','rb').read(), ContentType='application/json')
+          print('uploaded data/warden_silent_state.json to R2')
+          PYEOF
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+
+      - name: Publish triage queue to R2 (hard-fail: silence must never look clean)
+        run: |
+          python3 - <<'PYEOF'
+          import boto3, os
+          s3 = boto3.client('s3', region_name='auto', endpoint_url=os.environ['R2_ENDPOINT'],
+              aws_access_key_id=os.environ['R2_ACCESS_KEY_ID'],
+              aws_secret_access_key=os.environ['R2_SECRET_ACCESS_KEY'])
+          s3.put_object(Bucket=os.environ['R2_BUCKET_NAME'], Key='data/warden_triage_queue.json',
+                        Body=open('warden_triage_queue.json','rb').read(), ContentType='application/json')
+          print('uploaded data/warden_triage_queue.json to R2')
+          PYEOF
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
