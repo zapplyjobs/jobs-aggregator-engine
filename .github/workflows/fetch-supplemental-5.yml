@@ -1,9 +1,9 @@
-name: Fetch Phenom Supplemental
+name: Supplemental Ingest 5
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '23 * * * *'  # hourly GHA self-trigger (Workflow Trigger Policy option 1). Phenom supply is slow-moving retail/mid-employer volume; sitemap diff + 250/run detail budget converges in ~2 days from cold. Worker dual-trigger rider filed to INF (AGG-FAMWORK-WORKERRIDER-1).
+    - cron: '23 * * * *'
 concurrency:
   group: fetch-phenom-supplemental
   cancel-in-progress: false

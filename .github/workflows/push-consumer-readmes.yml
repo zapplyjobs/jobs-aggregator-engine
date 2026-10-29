@@ -1,8 +1,5 @@
 name: Push Consumer READMEs
 
-# Wave-linked from jobs-data-2026/enrich-jobs.yml AFTER enrichment completes, so the
-# 8 consumer boards get FRESH enrichment (visa/skills) instead of previous-cycle.
-# INF-CONSUMER-PUSH-ENRICH-RACE-1. Phase 1 (additive): fetch-jobs.yml's stale pre-enrich
 # push still runs as a fallback; Phase 2 removes it once this is verified.
 
 on:
@@ -17,7 +14,7 @@ concurrency:
 jobs:
   push:
     runs-on: ubuntu-latest
-    timeout-minutes: 25 # 09-04: 10-min budget killed 2 runs during hosted-runner congestion (generate step ~2 min warm; 25 covers slow runners)
+    timeout-minutes: 25
     permissions:
       contents: write
 

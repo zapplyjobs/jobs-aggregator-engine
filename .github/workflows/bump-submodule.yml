@@ -81,16 +81,16 @@ jobs:
 
           case "$SUBMODULE_NAME" in
             shared)
-              echo "repos=zapplyjobs/jobs-aggregator-private zapplyjobs/jobs-data-2026" >> "$GITHUB_OUTPUT"
+              echo "repos=zapplyjobs/jobs-aggregator-engine zapplyjobs/jobs-data-2026" >> "$GITHUB_OUTPUT"
               ;;
             aggregator)
-              echo "repos=zapplyjobs/jobs-aggregator-private" >> "$GITHUB_OUTPUT"
+              echo "repos=zapplyjobs/jobs-aggregator-engine" >> "$GITHUB_OUTPUT"
               ;;
             processing)
               echo "repos=zapplyjobs/jobs-data-2026" >> "$GITHUB_OUTPUT"
               ;;
             consumer)
-              echo "repos=zapplyjobs/jobs-aggregator-private" >> "$GITHUB_OUTPUT"
+              echo "repos=zapplyjobs/jobs-aggregator-engine" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "::error::Unknown submodule: $SUBMODULE_NAME"
@@ -127,7 +127,7 @@ jobs:
       - name: Disable dangerous workflows
         id: disable-workflows
         run: |
-          gh api repos/zapplyjobs/jobs-aggregator-private/actions/workflows/234555372/disable --method PUT --silent && echo "Disabled: aggregator/Fetch All Jobs" || echo "WARN: Could not disable"
+          gh api repos/zapplyjobs/jobs-aggregator-engine/actions/workflows/234555372/disable --method PUT --silent && echo "Disabled: aggregator/Fetch All Jobs" || echo "WARN: Could not disable"
           gh api repos/zapplyjobs/jobs-data-2026/actions/workflows/239692001/disable --method PUT --silent && echo "Disabled: jobs-data/Enrich Jobs" || echo "WARN: Could not disable"
           # Consumer repos are pure display (Phase 4) — no workflows to disable
 
@@ -159,7 +159,7 @@ jobs:
 
           echo "Bumping $SUBMODULE_NAME ($SUBMODULE_PATH) to ${TARGET_SHA:0:12} in ${#REPOS[@]} repo(s)"
 
-          # Gated fallback for branch-protected main (e.g. jobs-aggregator-private,
+          # Gated fallback for branch-protected main (e.g. jobs-aggregator-engine,
           # whose main requires the 'gate' status check). A direct git/refs/heads/main
           # PATCH is rejected while the required check is missing, so push a temp
           # branch (gate.yml triggers on push to any branch and runs on the bump
@@ -283,11 +283,11 @@ jobs:
 
           echo "### Workflow re-enable verification" >> "$GITHUB_STEP_SUMMARY"
 
-          gh api repos/zapplyjobs/jobs-aggregator-private/actions/workflows/234555372/enable --method PUT --silent && echo "Enabled: aggregator/Fetch All Jobs" || true
+          gh api repos/zapplyjobs/jobs-aggregator-engine/actions/workflows/234555372/enable --method PUT --silent && echo "Enabled: aggregator/Fetch All Jobs" || true
           gh api repos/zapplyjobs/jobs-data-2026/actions/workflows/239692001/enable --method PUT --silent && echo "Enabled: jobs-data/Enrich Jobs" || true
           # Consumer repos are pure display (Phase 4) — no workflows to re-enable
 
-          verify_active "jobs-aggregator-private" "234555372" "aggregator/Fetch All Jobs"
+          verify_active "jobs-aggregator-engine" "234555372" "aggregator/Fetch All Jobs"
           verify_active "jobs-data-2026" "239692001" "jobs-data/Enrich Jobs"
 
           if [ "$REENABLE_FAIL" -gt 0 ]; then

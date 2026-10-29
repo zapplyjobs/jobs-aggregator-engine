@@ -1,15 +1,18 @@
-name: Fetch Jobvite Supplemental
+#
+# Trigger: hourly GHA schedule (Workflow Trigger Policy option 1). Worker
+# do not add one.
+name: Supplemental Ingest 6
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '23 * * * *'  # hourly GHA self-trigger (Workflow Trigger Policy option 1). Jobvite supply is slow-moving retail/mid-employer volume; sitemap diff + 250/run detail budget converges in ~2 days from cold. Worker dual-trigger rider filed to INF (AGG-FAMWORK-WORKERRIDER-1).
+    - cron: '11 * * * *'
 concurrency:
-  group: fetch-jobvite-supplemental
+  group: fetch-trakstar-supplemental
   cancel-in-progress: false
 
 jobs:
-  fetch-jobvite-supplemental:
+  fetch-trakstar-supplemental:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -19,11 +22,15 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       NODE_OPTIONS: --max-old-space-size=4096
-      # A303 (AGG-JOBVITE-DETAILFAIL-FIX-1 item c): this lane reads ITS OWN env
-      # names now (the producer historically read PHENOM_DETAIL_BUDGET, silently
-      # coupling the two lanes' budgets). Floor 8 x 29 tenants ~= the 250 budget.
-      JOBVITE_DETAIL_BUDGET: '250'
-      JOBVITE_DETAIL_FLOOR: '8'
+      # Packet s4 sub-threshold detail pacing (no tarpit observed on the
+      # 180 did NOT fit the 15-min job timeout on cold start once per-fetch
+      # latency is counted (runDetailPhase sleeps before every fetch: 180x4s
+      # 15.5-16.5min -> the run dies mid-detail-phase, writes nothing, and
+      # refetches the same URLs hourly forever). 90 x 4s = 360s sleeps +
+      # URLs converge in ~17 hourly runs (<1 day). Set both together when
+      # retuning.
+      TRAKSTAR_DETAIL_PACING_MS: '4000'
+      TRAKSTAR_DETAIL_BUDGET: '90'
 
     steps:
       - name: Checkout repository
@@ -69,7 +76,7 @@ jobs:
       - name: Create data directory
         run: mkdir -p .github/data
 
-      - name: Seed Jobvite lane state from R2
+      - name: Seed Trakstar lane state from R2
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -78,23 +85,22 @@ jobs:
         run: |
           node -e "
           const { createR2Client } = require('./.github/scripts/aggregator/lib/storage/r2-client');
-          const fs = require('fs');
           async function downloadMaybe(r2, key, file) {
             const result = await r2.downloadToFile(key, file);
             console.log((result ? 'R2_OK' : 'R2_MISS') + ' ' + key);
           }
           (async () => {
             const r2 = createR2Client({ prefix: 'data/' });
-            await downloadMaybe(r2, 'jobvite-lane-state.json', '.github/data/jobvite-lane-state.json');
-            await downloadMaybe(r2, 'supplemental-jobvite-jobs.json', '.github/data/supplemental-jobvite-jobs.json');
-            await downloadMaybe(r2, 'supplemental-jobvite-metadata.json', '.github/data/supplemental-jobvite-metadata.json');
+            await downloadMaybe(r2, 'trakstar-lane-state.json', '.github/data/trakstar-lane-state.json');
+            await downloadMaybe(r2, 'supplemental-trakstar-jobs.json', '.github/data/supplemental-trakstar-jobs.json');
+            await downloadMaybe(r2, 'supplemental-trakstar-metadata.json', '.github/data/supplemental-trakstar-metadata.json');
           })().catch(e => { console.error('seed failed', e.message); process.exit(1); });
           "
 
-      - name: Fetch Jobvite jobs
+      - name: Fetch Trakstar jobs
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-        run: node .github/scripts/fetch-supplemental-jobvite.js
+        run: node .github/scripts/fetch-supplemental-trakstar.js

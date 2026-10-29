@@ -22,7 +22,7 @@ jobs:
         const https = require('https');
 
         const REPOS = [
-          'zapplyjobs/jobs-aggregator-private',
+          'zapplyjobs/jobs-aggregator-engine',
           'zapplyjobs/jobs-data-2026',
           'zapplyjobs/New-Grad-Jobs-2027',
           'zapplyjobs/Internships-2027',

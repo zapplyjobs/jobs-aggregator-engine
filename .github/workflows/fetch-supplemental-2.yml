@@ -1,23 +1,15 @@
-# ADP Workforce Now supplemental lane (AGG-PLATFORM-EXPANSION-GO-1, PIPE-20
-# steps 3-5, ADP leg build 2026-10-21). Producer: fetch-supplemental-adp.js
-# (OData $top/$skip JSON listing walk + itemID detail doors, trakstar-lane
-# mirror).
-#
-# Trigger: hourly GHA schedule (Workflow Trigger Policy option 1). Worker
-# dual-trigger rider DECLINED by ruling (INF-1032 B0, scheduler-call class) -
-# do not add one.
-name: Fetch ADP Supplemental
+name: Supplemental Ingest 2
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '37 * * * *'  # hourly GHA schedule (Workflow Trigger Policy option 1). Minute 37 is DISTINCT from the other lanes (trakstar 11, phenom+jobvite 23, jazzhr 41) and off the refresh grids (5/20/35/50, 8/23/38/53, */10, */15); never 53 (trakstar review lesson - the minute carries refresh-tag-aspect). ADP supply ~614 rows over 24 live boards; seen-set diff + 90/run detail budget converges in ~7 hourly runs from cold.
+    - cron: '41 * * * *'
 concurrency:
-  group: fetch-adp-supplemental
+  group: fetch-jazzhr-supplemental
   cancel-in-progress: false
 
 jobs:
-  fetch-adp-supplemental:
+  fetch-jazzhr-supplemental:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -27,14 +19,10 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       NODE_OPTIONS: --max-old-space-size=4096
-      # Trakstar review P1 lesson applied at build (not post-review): budget 90
-      # at 4000ms pacing = 360s sleeps + ~72s latency + ~100s listing walk
-      # (44 pages over 24 boards) + setup ~= 9-10min, inside the 15-min job
-      # timeout with cold-start margin (trakstar's derived 180 died
-      # mid-detail-phase once per-fetch latency was counted). Set both
+      # class measured 2026-10-10); 70s x 10 fits the 15-min timeout. Producer
       # together when retuning.
-      ADP_DETAIL_PACING_MS: '4000'
-      ADP_DETAIL_BUDGET: '90'
+      JAZZHR_DETAIL_PACING_MS: '70000'
+      JAZZHR_DETAIL_BUDGET: '10'
 
     steps:
       - name: Checkout repository
@@ -80,7 +68,7 @@ jobs:
       - name: Create data directory
         run: mkdir -p .github/data
 
-      - name: Seed ADP lane state from R2
+      - name: Seed JazzHR lane state from R2
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -95,16 +83,16 @@ jobs:
           }
           (async () => {
             const r2 = createR2Client({ prefix: 'data/' });
-            await downloadMaybe(r2, 'adp-lane-state.json', '.github/data/adp-lane-state.json');
-            await downloadMaybe(r2, 'supplemental-adp-jobs.json', '.github/data/supplemental-adp-jobs.json');
-            await downloadMaybe(r2, 'supplemental-adp-metadata.json', '.github/data/supplemental-adp-metadata.json');
+            await downloadMaybe(r2, 'jazzhr-lane-state.json', '.github/data/jazzhr-lane-state.json');
+            await downloadMaybe(r2, 'supplemental-jazzhr-jobs.json', '.github/data/supplemental-jazzhr-jobs.json');
+            await downloadMaybe(r2, 'supplemental-jazzhr-metadata.json', '.github/data/supplemental-jazzhr-metadata.json');
           })().catch(e => { console.error('seed failed', e.message); process.exit(1); });
           "
 
-      - name: Fetch ADP jobs
+      - name: Fetch JazzHR jobs
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-        run: node .github/scripts/fetch-supplemental-adp.js
+        run: node .github/scripts/fetch-supplemental-jazzhr.js

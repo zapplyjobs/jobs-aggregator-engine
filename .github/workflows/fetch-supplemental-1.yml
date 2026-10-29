@@ -1,22 +1,18 @@
-# Trakstar Hire supplemental lane (AGG-PLATFORM-EXPANSION-GO-1, PIPE-20 steps
-# 3-5, A315 build 2026-10-19). Producer: fetch-supplemental-trakstar.js
-# (sitemap enumeration + JobPosting JSON-LD details, jazzhr-lane mirror).
 #
 # Trigger: hourly GHA schedule (Workflow Trigger Policy option 1). Worker
-# dual-trigger rider DECLINED by ruling (INF-1032 B0, scheduler-call class) -
 # do not add one.
-name: Fetch Trakstar Supplemental
+name: Supplemental Ingest 1
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '11 * * * *'  # hourly GHA schedule (Workflow Trigger Policy option 1). Minute 11 shares the hourly band with lanes at :23/:41/:53 (minute-sharing precedent: jobvite+phenom both :23). Trakstar supply is slow-moving engineering volume; seen-set diff + 90/run detail budget converges in under a day from cold.
+    - cron: '37 * * * *'
 concurrency:
-  group: fetch-trakstar-supplemental
+  group: fetch-adp-supplemental
   cancel-in-progress: false
 
 jobs:
-  fetch-trakstar-supplemental:
+  fetch-adp-supplemental:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -26,18 +22,11 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       NODE_OPTIONS: --max-old-space-size=4096
-      # Packet s4 sub-threshold detail pacing (no tarpit observed on the
-      # platform, same-class prudence as JazzHR). Review fix P1 (A315): budget
-      # 180 did NOT fit the 15-min job timeout on cold start once per-fetch
-      # latency is counted (runDetailPhase sleeps before every fetch: 180x4s
-      # = 720s sleeps + ~110-145s latency + sitemap walk + setup ~=
-      # 15.5-16.5min -> the run dies mid-detail-phase, writes nothing, and
-      # refetches the same URLs hourly forever). 90 x 4s = 360s sleeps +
-      # ~72s latency + ~30s sitemaps + setup ~= 9-10min; cold-start 1,474
-      # URLs converge in ~17 hourly runs (<1 day). Set both together when
-      # retuning.
-      TRAKSTAR_DETAIL_PACING_MS: '4000'
-      TRAKSTAR_DETAIL_BUDGET: '90'
+      # timeout with cold-start margin (trakstar's derived 180 died
+      # mid-detail-phase once per-fetch latency was counted). Set both
+      # together when retuning.
+      ADP_DETAIL_PACING_MS: '4000'
+      ADP_DETAIL_BUDGET: '90'
 
     steps:
       - name: Checkout repository
@@ -83,7 +72,7 @@ jobs:
       - name: Create data directory
         run: mkdir -p .github/data
 
-      - name: Seed Trakstar lane state from R2
+      - name: Seed ADP lane state from R2
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -98,16 +87,16 @@ jobs:
           }
           (async () => {
             const r2 = createR2Client({ prefix: 'data/' });
-            await downloadMaybe(r2, 'trakstar-lane-state.json', '.github/data/trakstar-lane-state.json');
-            await downloadMaybe(r2, 'supplemental-trakstar-jobs.json', '.github/data/supplemental-trakstar-jobs.json');
-            await downloadMaybe(r2, 'supplemental-trakstar-metadata.json', '.github/data/supplemental-trakstar-metadata.json');
+            await downloadMaybe(r2, 'adp-lane-state.json', '.github/data/adp-lane-state.json');
+            await downloadMaybe(r2, 'supplemental-adp-jobs.json', '.github/data/supplemental-adp-jobs.json');
+            await downloadMaybe(r2, 'supplemental-adp-metadata.json', '.github/data/supplemental-adp-metadata.json');
           })().catch(e => { console.error('seed failed', e.message); process.exit(1); });
           "
 
-      - name: Fetch Trakstar jobs
+      - name: Fetch ADP jobs
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-        run: node .github/scripts/fetch-supplemental-trakstar.js
+        run: node .github/scripts/fetch-supplemental-adp.js
