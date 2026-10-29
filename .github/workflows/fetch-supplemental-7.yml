@@ -1,4 +1,4 @@
-name: Fetch Custom Supplemental
+name: Supplemental Ingest 7
 
 on:
   workflow_dispatch:

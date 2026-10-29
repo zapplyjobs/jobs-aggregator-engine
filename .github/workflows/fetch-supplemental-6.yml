@@ -5,7 +5,7 @@
 # Trigger: hourly GHA schedule (Workflow Trigger Policy option 1). Worker
 # dual-trigger rider DECLINED by ruling (INF-1032 B0, scheduler-call class) -
 # do not add one.
-name: Fetch Trakstar Supplemental
+name: Supplemental Ingest 6
 
 on:
   workflow_dispatch:

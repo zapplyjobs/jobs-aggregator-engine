@@ -1,15 +1,15 @@
-name: Fetch JazzHR Supplemental
+name: Supplemental Ingest 5
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '41 * * * *'  # hourly GHA self-trigger (Workflow Trigger Policy option 1). JazzHR supply is slow-moving SMB/industrial volume; seen-set diff + 250/run detail budget converges in ~2-3 days from cold. Worker dual-trigger rider to INF (AGG-FAMWORK-WORKERRIDER-1 pattern).
+    - cron: '23 * * * *'  # hourly GHA self-trigger (Workflow Trigger Policy option 1). Phenom supply is slow-moving retail/mid-employer volume; sitemap diff + 250/run detail budget converges in ~2 days from cold. Worker dual-trigger rider filed to INF (AGG-FAMWORK-WORKERRIDER-1).
 concurrency:
-  group: fetch-jazzhr-supplemental
+  group: fetch-phenom-supplemental
   cancel-in-progress: false
 
 jobs:
-  fetch-jazzhr-supplemental:
+  fetch-phenom-supplemental:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -19,12 +19,6 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       NODE_OPTIONS: --max-old-space-size=4096
-      # AGG-JAZZHR-DETAILJSONLD-REJECT-1: sub-threshold detail pacing (rate-shell
-      # class measured 2026-10-10); 70s x 10 fits the 15-min timeout. Producer
-      # derives budget from pace when JAZZHR_DETAIL_BUDGET is unset - set both
-      # together when retuning.
-      JAZZHR_DETAIL_PACING_MS: '70000'
-      JAZZHR_DETAIL_BUDGET: '10'
 
     steps:
       - name: Checkout repository
@@ -70,7 +64,7 @@ jobs:
       - name: Create data directory
         run: mkdir -p .github/data
 
-      - name: Seed JazzHR lane state from R2
+      - name: Seed Phenom lane state from R2
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -79,22 +73,23 @@ jobs:
         run: |
           node -e "
           const { createR2Client } = require('./.github/scripts/aggregator/lib/storage/r2-client');
+          const fs = require('fs');
           async function downloadMaybe(r2, key, file) {
             const result = await r2.downloadToFile(key, file);
             console.log((result ? 'R2_OK' : 'R2_MISS') + ' ' + key);
           }
           (async () => {
             const r2 = createR2Client({ prefix: 'data/' });
-            await downloadMaybe(r2, 'jazzhr-lane-state.json', '.github/data/jazzhr-lane-state.json');
-            await downloadMaybe(r2, 'supplemental-jazzhr-jobs.json', '.github/data/supplemental-jazzhr-jobs.json');
-            await downloadMaybe(r2, 'supplemental-jazzhr-metadata.json', '.github/data/supplemental-jazzhr-metadata.json');
+            await downloadMaybe(r2, 'phenom-lane-state.json', '.github/data/phenom-lane-state.json');
+            await downloadMaybe(r2, 'supplemental-phenom-jobs.json', '.github/data/supplemental-phenom-jobs.json');
+            await downloadMaybe(r2, 'supplemental-phenom-metadata.json', '.github/data/supplemental-phenom-metadata.json');
           })().catch(e => { console.error('seed failed', e.message); process.exit(1); });
           "
 
-      - name: Fetch JazzHR jobs
+      - name: Fetch Phenom jobs
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-        run: node .github/scripts/fetch-supplemental-jazzhr.js
+        run: node .github/scripts/fetch-supplemental-phenom.js
