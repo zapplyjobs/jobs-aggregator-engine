@@ -169,21 +169,26 @@ jobs:
             local repo="$1" new_commit="$2"
             local branch="inf/bump-${SUBMODULE_NAME}-${GITHUB_RUN_ID}"
             local bref="refs/heads/$branch"
-            if ! printf '{"ref":"%s","sha":"%s"}' "$bref" "$new_commit" \
-                | gh api "repos/$repo/git/refs" --method POST --input - --silent 2>/dev/null; then
-              echo "    gated: temp-branch create failed for $repo"
+            local diag="/tmp/gated-diag-$SUBMODULE_NAME-$GITHUB_RUN_ID.log"
+            local create_err
+            if ! create_err=$(printf '{"ref":"%s","sha":"%s"}' "$bref" "$new_commit" \
+                | gh api "repos/$repo/git/refs" --method POST --input - 2>&1); then
+              echo "    gated: temp-branch create failed for $repo: $(echo "$create_err" | head -3)"
               return 1
             fi
             echo "    gated: pushed $branch -> waiting for required checks (gate + repo-guard)"
             local conclusion="" guard_conc="" waited=0
             while [ "$waited" -lt 900 ]; do
               conclusion=$(gh api "repos/$repo/actions/workflows/gate.yml/runs?branch=$branch&per_page=1" \
-                           --jq '.workflow_runs[0].conclusion // empty' 2>/dev/null)
+                           --jq '.workflow_runs[0].conclusion // empty' 2>>"$diag") || true
               guard_conc=$(gh api "repos/$repo/commits/$new_commit/check-runs?per_page=100" \
-                           --jq '[.check_runs[] | select(.name == "guard")][0].conclusion // empty' 2>/dev/null)
+                           --jq '[.check_runs[] | select(.name == "guard")][0].conclusion // empty' 2>>"$diag") || true
               if [ -n "$conclusion" ] && [ -n "$guard_conc" ]; then break; fi
               sleep 20; waited=$((waited + 20))
             done
+            if [ -z "$conclusion" ] || [ -z "$guard_conc" ]; then
+              echo "    gated: check poll never returned gate+guard conclusions for $repo after ${waited}s (gate='${conclusion:-none}' guard='${guard_conc:-none}'); last poll errors: $(tail -3 "$diag" 2>/dev/null | tr '\n' ' ' | head -c 400)"
+            fi
             if [ "$conclusion" != "success" ]; then
               echo "    gated: gate conclusion='${conclusion:-timeout}' (expected success); abandoning $repo"
               gh api "repos/$repo/git/refs/heads/$branch" --method DELETE --silent 2>/dev/null || true
@@ -195,15 +200,15 @@ jobs:
               return 1
             fi
             echo "    gated: gate + repo-guard green on $branch"
-            local update
-            if update=$(printf '{"sha":"%s","force":false}' "$new_commit" \
-                        | gh api "repos/$repo/git/refs/heads/main" --method PATCH --input - --jq '.object.sha' 2>/dev/null) \
-               && [ -n "$update" ]; then
+            local update patch_err
+            update=$(printf '{"sha":"%s","force":false}' "$new_commit" \
+                     | gh api "repos/$repo/git/refs/heads/main" --method PATCH --input - --jq '.object.sha' 2>/tmp/ff-diag-$SUBMODULE_NAME-$GITHUB_RUN_ID.log) || true
+            if [ -n "$update" ]; then
               echo "    gated: main -> ${update:0:12}"
               gh api "repos/$repo/git/refs/heads/$branch" --method DELETE --silent 2>/dev/null || true
               echo "$update"; return 0
             fi
-            echo "    gated: main fast-forward still rejected for $repo"
+            echo "    gated: main fast-forward still rejected for $repo: $(head -3 /tmp/ff-diag-$SUBMODULE_NAME-$GITHUB_RUN_ID.log 2>/dev/null | tr '\n' ' ' | head -c 400)"
             gh api "repos/$repo/git/refs/heads/$branch" --method DELETE --silent 2>/dev/null || true
             return 1
           }
@@ -258,7 +263,13 @@ jobs:
           echo "Bumped $SUBMODULE_NAME: $PASS passed, $FAIL failed (${#REPOS[@]} repos)" >> "$GITHUB_STEP_SUMMARY"
           echo "pass_count=$PASS" >> "$GITHUB_OUTPUT"
           echo "fail_count=$FAIL" >> "$GITHUB_OUTPUT"
-          [ "$FAIL" -gt 0 ] && echo "::warning::$FAIL repo(s) failed to bump." || true
+          # INF-1046 (2026-10-30): a fully-failed write used to be a GREEN step with only a
+          # warning annotation; the run then died at the verify step with no bump context, and
+          # nothing ever retried the failed repo (concurrency-cancel class). Fail loud here.
+          if [ "$FAIL" -gt 0 ]; then
+            echo "::error::$FAIL repo(s) failed to bump (direct + gated). The pin chain for: $(echo "$RESULTS" | tr '\n' ' ') is BROKEN. Diagnose with the gated lines above; if none appear, the failure happened before the first gated echo."
+            exit 1
+          fi
 
       - name: Re-enable dangerous workflows
         if: always()
