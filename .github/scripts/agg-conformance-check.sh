@@ -66,7 +66,7 @@ import os
 import re
 import sys
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 WINDOW_MB = int(os.environ.get("CONFORMANCE_WINDOW_MB", "6"))
 FULL = os.environ.get("CONFORMANCE_FULL") == "1"
@@ -84,14 +84,28 @@ CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 UNDEFINED_ID_RE = re.compile(r"(^|-)(undefined|null|None)(-|$)")
 
 
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
 def parse_iso(v):
-    """Parse an ISO-8601 timestamp; returns aware datetime or None."""
-    if not isinstance(v, str) or not ISO_RE.match(v):
+    """Parse an ISO-8601 timestamp or date; returns aware datetime or None.
+
+    Date-only values (YYYY-MM-DD) are valid source posting dates per the
+    contract field row and parse at UTC midnight - the same value JS Date()
+    produces runtime-side, so anchor semantics are identical
+    (AGG-PHENOM-POSTEDAT-PARSE-1: the phenom-tjx lane emits schema.org
+    datePosted passthrough date-only; runtime anchors were never affected).
+    """
+    if not isinstance(v, str):
         return None
     try:
-        return datetime.fromisoformat(v.replace("Z", "+00:00"))
+        if ISO_RE.match(v):
+            return datetime.fromisoformat(v.replace("Z", "+00:00"))
+        if DATE_RE.match(v):
+            return datetime.fromisoformat(v).replace(tzinfo=timezone.utc)
     except ValueError:
         return None
+    return None
 
 
 def check_row(row, now):
@@ -161,6 +175,18 @@ def check_row(row, now):
         if not isinstance(emp, str) or not emp.strip():
             fail("TAGS_EMPLOYMENT_TYPE", repr(emp)[:60])
 
+    # application_deadline: ISO 8601 or absent (AGG-VALIDTHROUGH-DEADLINE-1,
+    # A303: supplemental-lane pass-through; never a fabricated/unparsable date)
+    ad = row.get("application_deadline")
+    if ad is not None:
+        if not isinstance(ad, str) or not ad.strip():
+            fail("APPLICATION_DEADLINE_TYPE", repr(ad)[:60])
+        else:
+            try:
+                datetime.fromisoformat(ad.replace("Z", "+00:00"))
+            except ValueError:
+                fail("APPLICATION_DEADLINE_NOT_ISO", repr(ad)[:60])
+
     # display_location sanity (canonical display string classes)
     dl = row.get("display_location")
     if not isinstance(dl, str) or not dl.strip():
@@ -211,12 +237,12 @@ def check_row(row, now):
 GOOD_ROW = {
     "id": "gh-acme-123", "title": "Software Engineer, Backend",
     "company_name": "Acme", "url": "https://jobs.example.com/123",
-    "posted_at": "2026-09-01T12:00:00.000Z", "source": "greenhouse",
+    "posted_at": (datetime.now(timezone.utc) - timedelta(days=4)).strftime("%Y-%m-%dT%H:%M:%S.000Z"), "source": "greenhouse",
     "location": "San Jose, CA", "locations": ["San Jose, CA"],
     "display_location": "San Jose, CA",
     "tags": {"employment": "full_time", "domains": ["software"], "locations": ["us"]},
     "salaryMin": 120000, "salaryMax": 180000, "salaryCurrency": "USD",
-    "anchor_ts": "2026-09-02T12:00:00.000Z",
+    "anchor_ts": (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
 }
 
 
@@ -243,11 +269,16 @@ SELFTEST_CASES = [
     ("missing required id", mutate(GOOD_ROW, id="__DEL__"), ["REQUIRED_MISSING"]),
     ("url not http", mutate(GOOD_ROW, url="javascript:void(0)"), ["URL_NOT_HTTP"]),
     ("posted_at unparseable", mutate(GOOD_ROW, posted_at="whenever"), ["POSTED_AT_UNPARSEABLE"]),
+    ("posted_at date-only accepted (AGG-PHENOM-POSTEDAT-PARSE-1)", mutate(GOOD_ROW, posted_at="2026-09-01"), []),
+    ("posted_at garbage date-ish rejected", mutate(GOOD_ROW, posted_at="2026-09-29ish"), ["POSTED_AT_UNPARSEABLE"]),
     ("tags employment not string", mutate(GOOD_ROW, tags={"employment": ["internship"], "domains": [], "locations": []}), ["TAGS_EMPLOYMENT_TYPE"]),
-    ("ttl exceeded regular", mutate(GOOD_ROW, anchor_ts="2026-07-01T12:00:00.000Z"), ["ANCHOR_BEFORE_POSTED", "TTL_EXCEEDED"]),
+    ("ttl exceeded regular", mutate(GOOD_ROW, anchor_ts=(datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S.000Z")), ["ANCHOR_BEFORE_POSTED", "TTL_EXCEEDED"]),
     ("currency shape", mutate(GOOD_ROW, salaryCurrency="us$"), ["SALARY_CURRENCY_SHAPE"]),
     ("id undefined segment", mutate(GOOD_ROW, id="oracle-undefined-23026"), ["ID_UNDEFINED_SEGMENT"]),
     ("anchor_ts missing", mutate(GOOD_ROW, anchor_ts="__DEL__"), ["ANCHOR_TS_MISSING"]),
+    ("application_deadline ISO accepted (AGG-VALIDTHROUGH-DEADLINE-1)", mutate(GOOD_ROW, application_deadline="2026-11-15T23:59:59.000Z"), []),
+    ("application_deadline non-ISO rejected", mutate(GOOD_ROW, application_deadline="Nov 15th"), ["APPLICATION_DEADLINE_NOT_ISO"]),
+    ("application_deadline wrong type rejected", mutate(GOOD_ROW, application_deadline=1731600000000), ["APPLICATION_DEADLINE_TYPE"]),
 ]
 
 
@@ -270,25 +301,42 @@ def run_selftest(now):
     return 0
 
 
-def iter_windows(s3, bucket, key, total_bytes):
-    """Yield (label, list-of-line-text) for head+mid+tail windows.
+def iter_windows(s3, bucket, key, total_bytes, now=None):
+    """Yield (label, list-of-line-text) for head+rotating-mid+tail windows.
 
     Mid windows exist because the pool is sorted by posted_at: head+tail only see
     the extremes, and whole cohorts (e.g. supplemental-lane sources) sort mid-file
     where a 19K-row shape drift was invisible to the first suite version.
+    AGG-CONFORMANCE-ROTATING-WINDOWS-1: the two mid offsets ROTATE on a
+    YYYYMMDDHH seed (deterministic - same hour re-runs sample identical offsets,
+    so findings are reproducible; different hours walk different mid-file
+    cohorts, closing the fixed-offset blind spot). Offsets are printed in the
+    run basis line so any two runs can be compared.
     """
+    now = now or datetime.now(timezone.utc)
+    seed = int(now.strftime("%Y%m%d%H"))
     W = WINDOW_MB * 1024 * 1024
     head = s3.get_object(Bucket=bucket, Key=key, Range=f"bytes=0-{W}")["Body"].read().decode()
     lines = head.split("\n")[:-1]  # drop trailing partial line
     yield "head", lines
-    for label, frac in (("mid40", 0.4), ("mid70", 0.7)):
+    f1 = 0.20 + (seed % 60) * 0.01          # 0.20 .. 0.79
+    f2 = f1 + 0.15                           # 0.35 .. 0.94, always after mid1
+    for label, frac in (("mid1", f1), ("mid2", f2)):
         off = int(total_bytes * frac)
         mid = s3.get_object(Bucket=bucket, Key=key, Range=f"bytes={off}-{off+W}")["Body"].read().decode()
         lines = mid.split("\n")[1:-1]  # trim partial lines at both edges
-        yield label, lines
+        yield f"{label}@{frac:.2f}", lines
     tail = s3.get_object(Bucket=bucket, Key=key, Range=f"bytes=-{W}")["Body"].read().decode()
     lines = tail.split("\n")[1:]  # drop leading partial line
     yield "tail", lines
+
+
+def rotation_offsets(now=None):
+    """Public mid-window fracs for a timestamp (verification + next-run preview)."""
+    now = now or datetime.now(timezone.utc)
+    seed = int(now.strftime("%Y%m%d%H"))
+    f1 = 0.20 + (seed % 60) * 0.01
+    return f1, f1 + 0.15
 
 
 def main():
@@ -380,7 +428,10 @@ def main():
     else:
         for label, lines in iter_windows(s3, bucket, key, total_bytes):
             ingest(label, lines)
-        basis = f"HEAD+MID+TAIL windows {WINDOW_MB}MB each of {total_bytes/1e6:.0f}MB"
+        f1, f2 = rotation_offsets(now)
+        nf1, nf2 = rotation_offsets(now + timedelta(hours=1))
+        basis = (f"HEAD+TAIL + ROTATING MID windows {WINDOW_MB}MB each of {total_bytes/1e6:.0f}MB; "
+                 f"mid fracs this run {f1:.2f}/{f2:.2f}, next hour {nf1:.2f}/{nf2:.2f} (YYYYMMDDHH seed)")
 
     dup_fp = sum(c - 1 for c in fp_counts.values() if c > 1)
 
