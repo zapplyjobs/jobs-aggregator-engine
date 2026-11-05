@@ -59,6 +59,43 @@ jobs:
           curl -sf -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" "$SUPABASE_URL/storage/v1/object/pipeline-data/stale-job-history.json" -o stale-job-history.prev.json 2>/dev/null && echo "seeded stale-job-history.prev" || echo "no prior stale-job-history"
           curl -sf -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" "$SUPABASE_URL/storage/v1/object/pipeline-data/jobs-metadata.json" -o jobs-metadata.json 2>/dev/null && echo "seeded jobs-metadata" || echo "no prior jobs-metadata"
 
+      - name: Priority probes - reported URLs (AGG-LINKTRUTH-FULLCOVERAGE-1 item 4)
+        id: priority-probes
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: |
+          # AGG-LINKTRUTH item 4 / OUT-DEADLINK-INTAKE-HANDOFF-1: dev-QA reported URLs ride
+          # the EXISTING url-file mode as priority probes - no new workflow, no new alert
+          # surface. OUT publishes data/reports/dead-link-reported-urls.txt (one URL per
+          # line, # comments allowed). Probes run BEFORE the sample pass so priority dead
+          # entries merge into the same history -> tombstone pipeline the sample uses.
+          # Absent/empty file = loud skip (defensive, same rule as the exclusion loader).
+          if aws s3 cp "s3://${R2_BUCKET_NAME}/data/reports/dead-link-reported-urls.txt" ./reported-urls.txt --endpoint-url "${R2_ENDPOINT}" --region auto; then
+            N=$(grep -cv -e '^#' -e '^$' reported-urls.txt || true)
+            if [ "${N:-0}" -gt 0 ]; then
+              echo "Priority probes: $N reported URL(s) found - probing"
+              set +e
+              node .github/scripts/check-link-health.js --url-file reported-urls.txt --history-in stale-job-history.prev.json --write-history reported-history.json > priority-probe-report.json
+              PEXIT=$?
+              set -e
+              echo "priority_probe_exit=$PEXIT (1 = dead link among reported URLs - expected, not a step failure)"
+              PDEAD=$(python3 -c "import json;d=json.load(open('priority-probe-report.json'));print(d.get('dead',0))" 2>/dev/null || echo '?')
+              echo "PRIORITY_PROBE_DEAD=$PDEAD" >> "$GITHUB_OUTPUT"
+              echo "### Priority probes (reported URLs)" >> "$GITHUB_STEP_SUMMARY"
+              echo "- probed $N url(s), dead: $PDEAD" >> "$GITHUB_STEP_SUMMARY"
+              cp reported-history.json stale-job-history.prev.json
+            else
+              echo "reported-urls file present but empty of URLs - priority pass skipped"
+              echo "PRIORITY_PROBE_DEAD=0" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "no data/reports/dead-link-reported-urls.txt on R2 yet - priority pass skipped (OUT publish pending)"
+            echo "PRIORITY_PROBE_DEAD=0" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run AGG link health sample
         id: link-health
         env:
@@ -118,6 +155,8 @@ jobs:
           name: agg-link-health
           path: |
             agg-link-health.json
+            priority-probe-report.json
+            reported-urls.txt
             stale-job-candidates.json
             stale-job-history.json
             stale-job-tombstones.json
