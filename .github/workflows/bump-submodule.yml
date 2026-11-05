@@ -228,7 +228,7 @@ jobs:
             # instead. Inconclusive pin read = proceed (a redundant bump is safer than a
             # blocked one).
             CURRENT_PIN=$(gh api "repos/$REPO/git/trees/$TREE?recursive=1" \
-              --jq "[.tree[] | select(.path == \"$SUBMODULE_PATH\" and .mode == \"160000\") | .sha]" 2>/dev/null | head -1) || CURRENT_PIN=""
+              --jq ".tree[] | select(.path == \"$SUBMODULE_PATH\" and .mode == \"160000\") | .sha" 2>/dev/null | head -1) || CURRENT_PIN=""
             if [ "$CURRENT_PIN" = "$TARGET_SHA" ]; then
               echo "  SKIP (no-change): $REPO_NAME pin already ${SHORT_SHA} - no empty commit pushed (AGG-BUMP-EMPTYCOMMIT-GUARD-1)"
               RESULTS="${RESULTS}SKIP: ${REPO_NAME} (pin already ${SHORT_SHA})\n"
