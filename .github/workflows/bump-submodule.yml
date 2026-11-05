@@ -155,6 +155,7 @@ jobs:
           SHORT_SHA="${TARGET_SHA:0:7}"
           PASS=0
           FAIL=0
+          SKIPPED=0
           RESULTS=""
 
           echo "Bumping $SUBMODULE_NAME ($SUBMODULE_PATH) to ${TARGET_SHA:0:12} in ${#REPOS[@]} repo(s)"
@@ -220,6 +221,24 @@ jobs:
             HEAD=$(gh api "repos/$REPO/git/ref/heads/main" --jq '.object.sha' 2>/dev/null) || { echo "  FAIL: $REPO_NAME (no main ref)"; RESULTS="${RESULTS}FAIL: ${REPO_NAME}\n"; FAIL=$((FAIL + 1)); continue; }
             TREE=$(gh api "repos/$REPO/git/commits/$HEAD" --jq '.tree.sha' 2>/dev/null) || { echo "  FAIL: $REPO_NAME (no tree)"; RESULTS="${RESULTS}FAIL: ${REPO_NAME}\n"; FAIL=$((FAIL + 1)); continue; }
 
+            # AGG-BUMP-EMPTYCOMMIT-GUARD-1 (2026-11-04): when the pin already equals the
+            # target, committing anyway pushed an EMPTY commit that moved main off the
+            # just-landed SHA minutes after landing (observed 2e8e530, 1d5b484, 094a955),
+            # defeating the post-landing watch and polluting SHA-based audits. Skip loudly
+            # instead. Inconclusive pin read = proceed (a redundant bump is safer than a
+            # blocked one).
+            CURRENT_PIN=$(gh api "repos/$REPO/git/trees/$TREE?recursive=1" \
+              --jq "[.tree[] | select(.path == \"$SUBMODULE_PATH\" and .mode == \"160000\") | .sha]" 2>/dev/null | head -1) || CURRENT_PIN=""
+            if [ "$CURRENT_PIN" = "$TARGET_SHA" ]; then
+              echo "  SKIP (no-change): $REPO_NAME pin already ${SHORT_SHA} - no empty commit pushed (AGG-BUMP-EMPTYCOMMIT-GUARD-1)"
+              RESULTS="${RESULTS}SKIP: ${REPO_NAME} (pin already ${SHORT_SHA})\n"
+              SKIPPED=$((SKIPPED + 1))
+              continue
+            fi
+            if [ -z "$CURRENT_PIN" ]; then
+              echo "  WARN: $REPO_NAME current pin unreadable for $SUBMODULE_PATH - proceeding with bump (guard inconclusive)"
+            fi
+
             TREE_INPUT=$(printf '{"base_tree":"%s","tree":[{"path":"%s","mode":"160000","type":"commit","sha":"%s"}]}' "$TREE" "$SUBMODULE_PATH" "$TARGET_SHA")
             NEW_TREE=$(echo "$TREE_INPUT" | gh api "repos/$REPO/git/trees" --method POST --input - --jq '.sha' 2>/dev/null) || { echo "  FAIL: $REPO_NAME (tree create)"; RESULTS="${RESULTS}FAIL: ${REPO_NAME}\n"; FAIL=$((FAIL + 1)); continue; }
 
@@ -260,9 +279,10 @@ jobs:
           done
 
           printf '%b' "$RESULTS" >> "$GITHUB_STEP_SUMMARY"
-          echo "Bumped $SUBMODULE_NAME: $PASS passed, $FAIL failed (${#REPOS[@]} repos)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Bumped $SUBMODULE_NAME: $PASS passed, $FAIL failed, $SKIPPED skipped-no-change (${#REPOS[@]} repos)" >> "$GITHUB_STEP_SUMMARY"
           echo "pass_count=$PASS" >> "$GITHUB_OUTPUT"
           echo "fail_count=$FAIL" >> "$GITHUB_OUTPUT"
+          echo "skip_count=$SKIPPED" >> "$GITHUB_OUTPUT"
           # INF-1046 (2026-10-30): a fully-failed write used to be a GREEN step with only a
           # warning annotation; the run then died at the verify step with no bump context, and
           # nothing ever retried the failed repo (concurrency-cancel class). Fail loud here.
@@ -349,5 +369,5 @@ jobs:
           echo "### Summary" >> "$GITHUB_STEP_SUMMARY"
           echo "- Submodule: \`$SUBMODULE_NAME\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Target SHA: \`${TARGET_SHA:0:12}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Bump: ${{ steps.bump.outputs.pass_count }} passed, ${{ steps.bump.outputs.fail_count }} failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Bump: ${{ steps.bump.outputs.pass_count }} passed, ${{ steps.bump.outputs.fail_count }} failed, ${{ steps.bump.outputs.skip_count }} skipped-no-change" >> "$GITHUB_STEP_SUMMARY"
           echo "- Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> "$GITHUB_STEP_SUMMARY"

@@ -27,21 +27,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.sha }}
+          COMMIT_TS: ${{ github.event.head_commit.timestamp }}
           RUN_REPO: ${{ github.repository }}
           DISCORD_TOKEN: ${{ secrets.DISCORD_TEAM_TOKEN }}
           CHANNEL_ID: ${{ secrets.DISCORD_PIPELINE_ALERT_CHANNEL_ID }}
         run: |
           set -uo pipefail
           RUN_ID=""
-          # Wait up to 20 min for the Worker cadence to dispatch this SHA
-          # (hasActiveWorkflowRun may hold dispatch behind a still-running predecessor).
+          # AGG-POSTWATCH-BRANCHGREEN-1 (2026-11-04): head_sha alone matched feature-branch
+          # runs at the landed SHA (created BEFORE the landing) and reported GREEN with no
+          # main production run existing - the watch was false comfort for exactly the
+          # scenario it exists for. Require head_branch == main AND created_at after the
+          # landing commit timestamp. Wait up to 20 min for the Worker cadence to dispatch
+          # this SHA (hasActiveWorkflowRun may hold dispatch behind a still-running predecessor).
           for i in $(seq 1 40); do
-            RUN_ID=$(gh api "repos/$RUN_REPO/actions/workflows/fetch-jobs.yml/runs?head_sha=$SHA&per_page=1" --jq '.workflow_runs[0].id // ""')
+            RUN_ID=$(gh api "repos/$RUN_REPO/actions/workflows/fetch-jobs.yml/runs?head_sha=$SHA&per_page=50" \
+              --jq "[.workflow_runs[] | select(.head_branch == \"main\" and .created_at > \"$COMMIT_TS\")] | sort_by(.created_at) | (.[0].id // \"\")")
             if [ -n "$RUN_ID" ]; then break; fi
             sleep 30
           done
           if [ -z "$RUN_ID" ]; then
-            echo "No Fetch All Jobs dispatch observed for $SHA within 20 min (Worker hold or cadence gap) - non-fatal"
+            echo "No main-branch Fetch All Jobs dispatch after landing $SHA within 20 min (Worker hold or cadence gap) - non-fatal"
             exit 0
           fi
           C=""
@@ -54,14 +60,18 @@ jobs:
             sleep 45
           done
           if echo "$C" | grep -q "completed success"; then
-            echo "Post-landing run $RUN_ID GREEN at $SHA"
+            echo "Post-landing run $RUN_ID GREEN at $SHA (main branch, post-landing)"
             exit 0
           fi
           RUN_URL="https://github.com/$RUN_REPO/actions/runs/$RUN_ID"
-          MSG="🚨 **AGG post-landing watch: Fetch All Jobs FAILED on freshly landed main**\n• SHA: ${SHA}\n• Run: ${RUN_URL}\nAction: landing owner triages or reverts before the pool degrades"
+          if echo "$C" | grep -q "^completed"; then
+            MSG="🚨 **AGG post-landing watch: Fetch All Jobs FAILED on freshly landed main**\n• SHA: ${SHA}\n• Run: ${RUN_URL}\nAction: landing owner triages or reverts before the pool degrades"
+          else
+            MSG="🚨 **AGG post-landing watch: Fetch All Jobs DID NOT reach a conclusion within the watch window (status: ${C})**\n• SHA: ${SHA}\n• Run: ${RUN_URL}\nAction: run still unresolved - landing owner verifies manually; this is UNVERIFIED, not GREEN"
+          fi
           PAYLOAD=$(printf '{"content":"%s"}' "$MSG")
           curl -sf -X POST "https://discord.com/api/v10/channels/${CHANNEL_ID}/messages" \
             -H "Authorization: Bot ${DISCORD_TOKEN}" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" || echo "Discord alert failed (non-fatal)"
-          echo "Post-landing run $RUN_ID FAILED at $SHA - alerted"
+          echo "Post-landing run $RUN_ID at $SHA ended as [$C] - alerted"
