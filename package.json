@@ -1,5 +1,5 @@
 {
-  "name": "jobs-aggregator-private",
+  "name": "jobs-aggregator-engine",
   "version": "1.0.0",
   "description": "Zapply job aggregation pipeline",
   "main": ".github/scripts/index.js",
@@ -14,8 +14,6 @@
   "author": "zapplyjobs",
   "license": "MIT",
   "dependencies": {
-    "axios": "^1.6.0",
-    "discord.js": "^14.14.0",
     "@aws-sdk/client-s3": "^3.600.0"
   }
 }
