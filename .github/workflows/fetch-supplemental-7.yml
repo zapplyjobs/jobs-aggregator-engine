@@ -108,6 +108,23 @@ jobs:
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
 
+      - name: Seed microsoft cursor from R2 (AGG-MSPCSX-CURSOR-1)
+        run: |
+          node -e "
+          const { createR2Client } = require('./.github/scripts/aggregator/lib/storage/r2-client');
+          async function main() {
+            const r2 = createR2Client({ prefix: 'data/' });
+            const result = await r2.downloadToFile('microsoft-cursor.json', '.github/data/microsoft-cursor.json');
+            if (result) { console.log('R2_OK'); } else { process.exit(1); }
+          }
+          main().catch(() => process.exit(1));
+          " && echo "Seeded microsoft cursor" || echo "No microsoft cursor yet (first run)"
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+
       - name: Fetch custom supplemental lane
         run: node .github/scripts/fetch-supplemental-custom.js
         env:
@@ -158,6 +175,29 @@ jobs:
               const ok = await r2.uploadRaw('starbucks-cursor.json', fs.readFileSync('.github/data/starbucks-cursor.json', 'utf8'), 'application/json');
               if (!ok) process.exit(1);
               console.log('R2_OK: starbucks-cursor.json');
+            }
+            main().catch((e) => { console.error(e.message); process.exit(1); });
+            "
+          fi
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+
+      - name: Upload microsoft cursor to R2 (AGG-MSPCSX-CURSOR-1)
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -f .github/data/microsoft-cursor.json ]; then
+            node -e "
+            const { createR2Client } = require('./.github/scripts/aggregator/lib/storage/r2-client');
+            const fs = require('fs');
+            async function main() {
+              const r2 = createR2Client({ prefix: 'data/' });
+              const ok = await r2.uploadRaw('microsoft-cursor.json', fs.readFileSync('.github/data/microsoft-cursor.json', 'utf8'), 'application/json');
+              if (!ok) process.exit(1);
+              console.log('R2_OK: microsoft-cursor.json');
             }
             main().catch((e) => { console.error(e.message); process.exit(1); });
             "
