@@ -175,14 +175,21 @@ def c_data_quality():
 def c_performance():
     m = proxy_json("zjp-metrics.json")
     if not m: return "RED", "metrics unreadable", "proxy:metrics"
-    # AGG-PERF-METRIC-FIX-1: use pipeline_internal_minutes (sum of stage_timings from
-    # index.js step instrumentation) instead of aggregator_runtime_minutes, which queries
-    # ALL workflow runs (line 220 of generate-zjp-metrics.js) and picks up quick workflows
-    # (gate checks ~10s, aspect refreshes ~20s) as the aggregator's runtime.
-    rt = m.get("pipeline",{}).get("pipeline_internal_minutes")
-    if rt is None: return "YELLOW", "runtime missing", "zjp-metrics.pipeline_internal"
-    s = bucket_low(rt, 5, 8)
-    return s, f"{rt:.1f} min (script internal) — target <5, alert <8", "zjp-metrics.pipeline_internal"
+    # AGG-PERF-METRIC-FIX-1 history kept: pipeline_internal_minutes (sum of stage_timings)
+    # remains the fine-grained STAGE diagnostic; it no longer drives status.
+    # A300 (contract Throughput Parameters, amended 2026-10-05): whole-workflow WALL is the
+    # primary enforced contract - warn 10 / fail 11; the former <5 target is aspirational-only.
+    # Status now derives from the WALL bar (pipeline.aggregator_runtime_minutes, generator-scoped
+    # to the main run); stage-internal stays in the text as the decomposition diagnostic.
+    # Chronic wall-flap semantics (accepted 7.9-13.2 baseline band vs fail-11) are pending
+    # INF-ADVISORY-WALLTHRESHOLD-BAND-1 and are NOT changed here.
+    wall = m.get("pipeline",{}).get("aggregator_runtime_minutes")
+    stage = m.get("pipeline",{}).get("pipeline_internal_minutes")
+    if wall is None: return "YELLOW", "wall runtime missing (pipeline.aggregator_runtime_minutes)", "zjp-metrics.runtime"
+    if wall < 2.0: return "YELLOW", f"wall runtime implausible ({wall} min < 2; failed/in-progress run fallback or contamination suspect - AGG-PERF-METRIC-FIX-1 class)", "zjp-metrics.runtime"
+    s = bucket_low(wall, 10, 11)
+    stage_txt = f"{stage:.1f}" if isinstance(stage,(int,float)) else "?"
+    return s, f"{wall:.1f} min wall (stage-internal {stage_txt} min) — enforced warn 10 / fail 11 (A300); <5 aspirational-only; band-flap ruling pending INF-ADVISORY-WALLTHRESHOLD-BAND-1", "zjp-metrics.runtime"
 
 def c_infrastructure():
     m = proxy_json("zjp-metrics.json")
