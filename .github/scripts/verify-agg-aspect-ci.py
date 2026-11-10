@@ -192,13 +192,21 @@ def c_performance():
     return s, f"{wall:.1f} min wall (stage-internal {stage_txt} min) — enforced warn 10 / fail 11 (A300); <5 aspirational-only; band-flap ruling pending INF-ADVISORY-WALLTHRESHOLD-BAND-1", "zjp-metrics.runtime"
 
 def c_infrastructure():
+    # Storage mirror healthy + source fresh (<60 min). INF-1055 2026-11-10: was "R2
+    # bucket + manifest" - the zjp-metrics field (r2 -> storage_mirror) lists the
+    # Supabase Storage `pipeline-data` mirror; the age is the real all_jobs.json
+    # source age (r2Head primary, Storage fallback), not a tautological 0-min stamp.
+    # Loud rot (agg-metrics-ref row storage_mirror): a missing/non-dict
+    # storage_mirror key is schema drift - name it, never a bare 'unknown'.
     m = proxy_json("zjp-metrics.json")
     if not m: return "RED", "metrics unreadable", "proxy:metrics"
-    r2 = m.get("r2",{})
-    st = r2.get("status","unknown"); age = r2.get("manifest_age_minutes",9999)
-    if st == "healthy" and age <= 60: return "GREEN", f"R2 {st}, {age}min old", "zjp-metrics.r2"
-    elif st == "healthy": return "YELLOW", f"R2 {st} but {age}min old", "zjp-metrics.r2"
-    else: return "RED", f"R2 {st}", "zjp-metrics.r2"
+    mirror = m.get("storage_mirror")
+    if not isinstance(mirror, dict):
+        return "RED", "zjp-metrics.json missing storage_mirror (schema changed; check latest INF advisory)", "zjp-metrics.storage_mirror"
+    st = mirror.get("status","unknown"); age = mirror.get("source_age_minutes",9999)
+    if st == "healthy" and age <= 60: return "GREEN", f"Storage mirror {st}, source {age}min old, {mirror.get('file_count','?')} files", "zjp-metrics.storage_mirror"
+    elif st == "healthy": return "YELLOW", f"Storage mirror {st} but source {age}min old (stale)", "zjp-metrics.storage_mirror"
+    else: return "RED", f"Storage mirror status={st}", "zjp-metrics.storage_mirror"
 
 def c_security():
     crit = 0; total = 0
