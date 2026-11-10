@@ -252,9 +252,9 @@ def _atomic_write(path, text):
 def write_artifact(rows, source, monitor_generated_at, path=None, sources=None, by_marker=None):
     path = path or ARTIFACT
     today = _today()
-    # carried = future-dated carry only; an expired carry_until is DUE - the row re-fires.
-    carried = [r for r in rows if (r.get("carried_until") or "") >= today]
-    eligible = [r for r in rows if not ((r.get("carried_until") or "") >= today)]
+    # carried = future-dated carry only; a carry_until of today or earlier is DUE - the row re-fires ON its due date (F334 due-fire fix).
+    carried = [r for r in rows if (r.get("carried_until") or "") > today]
+    eligible = [r for r in rows if not ((r.get("carried_until") or "") > today)]
     # The >7d alarm leg counts the MONITOR universe only (EngChallenger P1-2, F325:
     # ~175 permanent list_silent rows bulk-cross 7d on 11-05/06 and would drown the
     # alarm forever - the habituation the queue split exists to kill). List-silent
@@ -326,7 +326,7 @@ def alarm_note(doc):
     a = doc["alarm"]
     over_all = sorted((r for r in doc["rows"]
                        if r["age_days"] > ALARM_AGE
-                       and not ((r.get("carried_until") or "") >= _today())
+                       and not ((r.get("carried_until") or "") > _today())
                        and r.get("source") != "list"),
                       key=lambda r: -r["age_days"])
     over = [r for r in over_all if r["owner"].split("/")[0] == "SUP"]
@@ -337,7 +337,7 @@ def alarm_note(doc):
     stale_n = len(bm.get("monitor_marked_with_baseline") or [])
     head = (f"[{doc['generated_at'][:10]}] Warden alarm: {len(over)} SUP-owned zero-output co >{ALARM_AGE}d, "
             f"{carried_n} carried (next due {doc.get('carried', {}).get('next_due')}), {fragile} identity-fragile "
-            f"(name-matched - cutover pending); list_silent >7d={a.get('list_silent_over_7d', 0)} "
+            f"(name/none - cutover pending); list_silent >7d={a.get('list_silent_over_7d', 0)} "
             f"(inventory, routed AGG-SILENTZEROS-APPLECAP-1); queue monitor={a.get('queue_monitor')} "
             f"list_silent={a.get('queue_list_silent')}. "
             f"Evidence basis: projects/zjp/state/generated/{ARTIFACT.name}. Kit files alarms; lead judges.")
@@ -417,8 +417,8 @@ def cmd_build(quiet=False):
     for r in rows:  # monitor rows inherit dispositions via bare-key/twin match
         rec = lookup(r["key"])
         if rec:
-            # normalize at stamp time (mirrors the list path): expired = DUE, not carried
-            r["carried_until"] = rec["carry_until"] if rec["carry_until"] >= _today() else None
+            # normalize at stamp time (mirrors the list path): today-or-past carry_until = DUE, not carried
+            r["carried_until"] = rec["carry_until"] if rec["carry_until"] > _today() else None
             r["disposition"] = rec.get("disposition")
     merged = merge_rows(rows, list_rows)
     collisions = len(rows) + len(list_rows) - len(merged)
@@ -620,7 +620,7 @@ def fetch_list_universe(now, env, state=None):
                      "owner": "SUP", "source": "list", "flags": ["silent_zero_list"],
                      "match_basis": basis,
                      "age_days": age, "first_flagged": first, "review_bucket": "silent_zero_list",
-                     "carried_until": carry if (carry and carry >= _today()) else None,
+                     "carried_until": carry if (carry and carry > _today()) else None,
                      "disposition": crec.get("disposition") if isinstance(crec, dict) else None,
                      "baseline_tech_us": None, "current_final": 0,
                      "review_reason": "list entry with zero pool rows (outside monitor universe)"[:140]})
@@ -733,6 +733,9 @@ def self_test():
     # Expiry: a past carry_until no longer suppresses (the row is DUE - it re-fires).
     due = write_artifact([dict(rows[0], carried_until="2026-01-01")], "fixture", monitor["generated_at"], path=tmp)
     assert due["alarm"]["sup_companies_over_7d"] == 1, due["alarm"]
+    # F334 due-fire fix: a carry_until of TODAY is DUE, not carried - the row re-fires ON its due date.
+    sameday = write_artifact([dict(rows[0], carried_until=_today())], "fixture", monitor["generated_at"], path=tmp)
+    assert sameday["carried"]["count"] == 0 and sameday["alarm"]["sup_companies_over_7d"] == 1, sameday["alarm"]
     # P1-1 (EngChallenger): expired carry through alarm_note - the row must PAGE, not vanish.
     dnote, dover, _ = alarm_note(due)
     assert len(dover) == 1 and "selftest-old-a 54d" in dnote, dnote[:300]
