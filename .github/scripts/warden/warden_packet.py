@@ -23,8 +23,11 @@ INTERN_RE = re.compile(r"\bintern", re.I)
 LEVER_CC = {"US": "United States", "CA": "Canada", "GB": "United Kingdom", "DE": "Germany", "FR": "France", "IN": "India", "SG": "Singapore", "AU": "Australia"}
 ROUTING = {"LIVE-UNFETCHED": "AGG (fetcher work - our gap)", "MOVED": "Intake (new board mapping)",
            "EMPTY": "Registry (lead judges died vs seasonal)", "GONE": "Registry (lead judges)",
+           "STALE-DATED-CANDIDATE": "lead dated-probe vs the 14d anchor; pass negative -> stale-dated stands (reopen: fresh dated postings)",
+           "MOVED-CANDIDATE": "lead judges - repoint via supply-change-preflight (variant-slug hit)",
            "UNPROBED-RETRY": "re-run the sweep; blocked probes are a fake-death class - never file died from one",
            "UNPROBED-FAMILY": "custom-door method (sup-source-research kit); a lead session probes the door"}
+ZERO_POOL_FLAG = "company_missing_from_final_output"  # relocation gate scope: zero-output rows only
 DEAD, BLOCKED = (404, 410), (0, 403, 500, 502, 503, 504)
 
 
@@ -156,15 +159,52 @@ def packet(entry, now=None):
     ats, slug = entry["ats"], entry["slug"]
     named = (PROBES[ats](slug) if ats in PROBES else
              {"status": None, "note": f"no canned probe for ats={ats}; custom-door method is a session step"})
-    discovery, blocked = [], False
+    discovery, blocked, gate_probes = [], False, 0
+    zero_pool = ZERO_POOL_FLAG in (entry.get("flags") or [])
     st = named.get("status")
-    if named.get("total"):
+
+    def relocation_pass():
+        # F321 relocation gate (R2-R3): a zero-output row finalizes only after a recorded
+        # pass - same-family dehyphenated variants included (full renames like Beacon's
+        # beaconsoftware->beaconholdings stay custom-door; the Allen Control lesson is the
+        # slug-variant class), cross-family slug + dehyphenated variants, stop on first live
+        # hit, budget <=10 probes. Verdicts carry no automated 30d trip: the LEAD re-probes
+        # any relocation verdict older than 30d before reusing it (WALLED-GATED precedent).
+        nonlocal discovery, blocked, gate_probes
+        for fam in PROBES:
+            for v in dict.fromkeys([slug, slug.replace("-", "")]):
+                if fam == ats and v == slug:
+                    continue  # the named board itself is already probed above
+                if gate_probes >= 10:
+                    return
+                gate_probes += 1
+                r = PROBES[fam](v)
+                if r.get("total"):
+                    discovery.append({"family": fam, "slug": v, **r})
+                    return
+                if r.get("status") in BLOCKED:
+                    blocked = True
+            if discovery:
+                return
+
+    if named.get("total") and not zero_pool:
         recommendation = "LIVE-UNFETCHED"
-    elif st == 200:
-        recommendation = "EMPTY"
+    elif zero_pool and st is not None and st not in BLOCKED:
+        relocation_pass()
+        if discovery:
+            same_slug = any(d["family"] != ats and d["slug"] == slug for d in discovery)
+            recommendation = "MOVED" if same_slug else "MOVED-CANDIDATE"
+        elif blocked:
+            recommendation = "UNPROBED-RETRY"
+        elif st == 200:
+            recommendation = "STALE-DATED-CANDIDATE" if named.get("total") else "EMPTY"
+        elif st in DEAD:
+            recommendation = "GONE"
+        else:
+            recommendation = "UNPROBED-FAMILY"
     elif st in BLOCKED:
         recommendation = "UNPROBED-RETRY"  # 403/network/5xx: fake-death class - never GONE/MOVED off these
-    else:  # named dead (404/410) or unsupported family: cross-family same-slug discovery
+    else:  # named dead/unsupported on a non-zero-pool row: cross-family same-slug discovery
         for fam in PROBES:
             if fam == ats:
                 continue
@@ -183,6 +223,8 @@ def packet(entry, now=None):
             recommendation = "UNPROBED-RETRY"
         elif st in DEAD:
             recommendation = "GONE"
+        elif st == 200:
+            recommendation = "EMPTY"
         else:
             recommendation = "UNPROBED-FAMILY"
     ff = entry.get("first_flagged")
@@ -193,6 +235,10 @@ def packet(entry, now=None):
                         "first_flagged": ff,
                         "age_days": (now - datetime.fromisoformat(ff.replace("Z", "+00:00"))).days if ff else None},
             "named_board_probe": named, "discovery": discovery, "verdict_recommendation": recommendation,
+            "relocation_check": ({"zero_pool": True, "ran": True, "probes": gate_probes,
+                                  "variant_hits": len(discovery), "blocked_probe": blocked,
+                                  "truncated": gate_probes >= 10}
+                                 if zero_pool else None),
             "routing_hint": ROUTING.get(recommendation), "law": "recommendation only - the lead issues the verdict (kits never judge)",
             "evidence_quote": discovery[0]["quote"] if discovery else named.get("quote"),
             "issued_at": now.isoformat(timespec="seconds")}
@@ -225,7 +271,9 @@ def self_test():
                 "/v0/postings/selftest-moved-co": (200, [
                     {"text": "Hardware Intern", "country": "US", "tags": {"location": ["San Jose"]}},
                     {"text": "QA Engineer", "country": "US", "tags": {"location": []}}]),
-                "/v1/boards/selftest-blocked-co/jobs": (403, {})}
+                "/v1/boards/selftest-blocked-co/jobs": (403, {}),
+                "/v0/postings/selftestmvco": (200, [
+                    {"text": "Platform Engineer Intern", "country": "US", "tags": {"location": ["Denver"]}}])}
     srv = _serve(fixtures, 28471)
     saved = dict(BASES)
     BASES.update((k, "http://127.0.0.1:28471") for k in BASES)
@@ -234,9 +282,10 @@ def self_test():
     ent = lambda key, ats, slug: {"company": key.title(), "key": key, "ats": ats, "slug": slug,
                                   "flags": ["company_missing_from_final_output"],
                                   "first_flagged": "2026-09-04T00:00:00Z", "baseline_tech_us": 210}
-    cases = [("selftest-live", "greenhouse", "selftest-live-co", "LIVE-UNFETCHED", (3, 2, 1, 54), None),
+    cases = [("selftest-live", "greenhouse", "selftest-live-co", "STALE-DATED-CANDIDATE", (3, 2, 1, 54), None),
              ("selftest-dead", "greenhouse", "selftest-dead-co", "GONE", None, None),
              ("selftest-moved", "ashby", "selftest-moved-co", "MOVED", None, "lever"),
+             ("selftest-mv", "greenhouse", "selftest-mv-co", "MOVED-CANDIDATE", None, "lever"),
              ("selftest-blocked", "greenhouse", "selftest-blocked-co", "UNPROBED-RETRY", None, None)]
     failures = []
     try:
@@ -251,6 +300,9 @@ def self_test():
                 ok = ok and nb["status"] == 404 and d0.get("family") == d_fam and d0.get("intern") == 1 and p["evidence_quote"]
             if verdict in ("GONE", "UNPROBED-RETRY"):
                 ok = ok and not p["discovery"]  # blocked probe never spawns discovery or a GONE
+            if key == "selftest-live":  # F321 relocation gate: the pass must be recorded on zero-pool rows
+                rc = p["relocation_check"]
+                ok = ok and rc and rc["ran"] and rc["zero_pool"] and rc["variant_hits"] == 0
             if not ok:
                 failures.append(f"{key}: {p}")
     finally:
@@ -260,8 +312,9 @@ def self_test():
         for f in failures:
             print("FAIL:", f)
         return 1
-    print("warden_packet self-test: PASS (live=LIVE-UNFETCHED 3/2us/1intern; dead=GONE; moved=MOVED via lever "
-          "discovery; blocked-403=UNPROBED-RETRY no discovery; localhost-only, fake slugs, zero real-company network)")
+    print("warden_packet self-test: PASS (live+zero-pool=STALE-DATED-CANDIDATE via relocation gate; dead=GONE; "
+          "moved=MOVED via lever same-slug; moved-variant=MOVED-CANDIDATE; blocked-403=UNPROBED-RETRY no discovery; "
+          "localhost-only, fake slugs, zero real-company network)")
     return 0
 
 
