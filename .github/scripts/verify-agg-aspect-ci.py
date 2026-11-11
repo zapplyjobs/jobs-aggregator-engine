@@ -187,9 +187,9 @@ def c_performance():
     stage = m.get("pipeline",{}).get("pipeline_internal_minutes")
     if wall is None: return "YELLOW", "wall runtime missing (pipeline.aggregator_runtime_minutes)", "zjp-metrics.runtime"
     if wall < 2.0: return "YELLOW", f"wall runtime implausible ({wall} min < 2; failed/in-progress run fallback or contamination suspect - AGG-PERF-METRIC-FIX-1 class)", "zjp-metrics.runtime"
-    s = bucket_low(wall, 10, 11)
+    s = bucket_low(wall, 13, 14)
     stage_txt = f"{stage:.1f}" if isinstance(stage,(int,float)) else "?"
-    return s, f"{wall:.1f} min wall (stage-internal {stage_txt} min) — enforced warn 10 / fail 11 (A300); <5 aspirational-only; band-flap ruling pending INF-ADVISORY-WALLTHRESHOLD-BAND-1", "zjp-metrics.runtime"
+    return s, f"{wall:.1f} min wall (stage-internal {stage_txt} min) — enforced warn 13 / fail 14 (A300 amended 2026-11-10, WallBand-measured, operator-approved); <5 aspirational-only; recalibration trigger rides the INF weekly battery (two-sided, sustained, hard cap fail < 15)", "zjp-metrics.runtime"
 
 def c_infrastructure():
     # Storage mirror healthy + source fresh (<60 min). INF-1055 2026-11-10: was "R2
