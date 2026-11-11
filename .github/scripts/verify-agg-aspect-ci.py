@@ -177,12 +177,13 @@ def c_performance():
     if not m: return "RED", "metrics unreadable", "proxy:metrics"
     # AGG-PERF-METRIC-FIX-1 history kept: pipeline_internal_minutes (sum of stage_timings)
     # remains the fine-grained STAGE diagnostic; it no longer drives status.
-    # A300 (contract Throughput Parameters, amended 2026-10-05): whole-workflow WALL is the
-    # primary enforced contract - warn 10 / fail 11; the former <5 target is aspirational-only.
+    # A300 as re-amended 2026-11-10 (A338-cont, WallBand-measured, processing 8289bbc):
+    # whole-workflow WALL is the primary enforced contract - warn 13 / fail 14 (supersedes
+    # the 10-05 A300 10/11 bar); the former <5 target is aspirational-only.
     # Status now derives from the WALL bar (pipeline.aggregator_runtime_minutes, generator-scoped
     # to the main run); stage-internal stays in the text as the decomposition diagnostic.
-    # Chronic wall-flap semantics (accepted 7.9-13.2 baseline band vs fail-11) are pending
-    # INF-ADVISORY-WALLTHRESHOLD-BAND-1 and are NOT changed here.
+    # Recalibration trigger: two-sided sustained trailing-14d-p90 at 2 consecutive weekly
+    # batteries (INF weekly battery leg), hard cap fail < 15.
     wall = m.get("pipeline",{}).get("aggregator_runtime_minutes")
     stage = m.get("pipeline",{}).get("pipeline_internal_minutes")
     if wall is None: return "YELLOW", "wall runtime missing (pipeline.aggregator_runtime_minutes)", "zjp-metrics.runtime"
