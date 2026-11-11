@@ -3,7 +3,8 @@ name: Description Backfill (WD+SR)
 # the main fetch pipeline. The main fetch-jobs workflow sets SKIP_WD_DESC_BACKFILL=1 +
 # SKIP_SR_DESC_BACKFILL=1 + writes wd-desc-queue.jsonl (pending WD jobs with _raw).
 # This workflow reads the WD queue (fetchWorkdayDescriptions) + reads all_jobs.json
-# for SR jobs (fetchSRDescriptions), fetches up to 1000 descriptions each, appends
+# for SR jobs (fetchSRDescriptions), fetches up to 2500 (WD) / 500 (SR) descriptions
+# per run (MAX_PER_RUN in lib/fetchers/{workday,smartrecruiters}-descriptions.js), appends
 # to the sidecars, and uploads to R2. Observed cadence ~every 3-5 min as of 2026-09-06
 # (GHA cron */10 + Worker dispatch) — clears backlogs faster while removing ~160s from the
 # main fetch hot path.
