@@ -11,7 +11,7 @@ name: Board Coverage Capture
 
 on:
   schedule:
-    - cron: '55 5 * * *'
+    # - cron: '55 5 * * *'  # paused 2026-11-13: artifact unconsumed (operator rejected render; basis moved to pool-derived) - manual workflow_dispatch retained per trigger policy
   workflow_dispatch: # manual operator tool: on-demand capture (e.g. post-lane-landing verification)
 
 concurrency:
