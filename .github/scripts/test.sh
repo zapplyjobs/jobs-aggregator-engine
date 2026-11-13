@@ -65,3 +65,10 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 echo "✓ All $total tests pass (matches gate)."
+
+# AGG-CONFCHECK-DTCRASH-1 fold: the weekly conformance judge selftest is hermetic
+# (no creds sourced, exits before boto3) - run it with the suite so the known-flip
+# arms execute in CI; the fetch-jobs judge step is continue-on-error and would
+# otherwise swallow this class (ConfAdversary-2, 2026-11-13).
+echo "--- agg-conformance-check.sh selftest"
+bash .github/scripts/agg-conformance-check.sh --selftest
