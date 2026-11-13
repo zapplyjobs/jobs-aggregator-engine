@@ -138,6 +138,11 @@ jobs:
           // OUT-TIER2-BOARDCONCENTRATION-1: SUP Tier-2 employer shelf list (classification authority)
           try { await r2.downloadToFile('sup_tier2_employers.json', '.github/data/sup_tier2_employers.json'); console.log('✅ Downloaded sup_tier2_employers.json'); }
           catch (e) { console.log('ℹ️ sup_tier2_employers.json not on R2 — Tier-2 filters fail open (retail board empty, broad boards unfiltered)'); }
+          // AGG-CANDIDATEB-MARKER-CAPTURE-1 D8: COVERED render input (board-coverage-v1,
+          // estate-wide covered + indexed-not-served + generated_at + basis_label).
+          // Soft-miss: absent/stale artifact renders NO badge (OUT-INV-8), never a failure.
+          try { await r2.downloadToFile('board-coverage.json', '.github/data/board-coverage.json'); console.log('✅ Downloaded board-coverage.json'); }
+          catch (e) { console.log('ℹ️ board-coverage.json not on R2 yet — READMEs render without the COVERED badge'); }
         }
         main().catch(e => { console.error('❌ R2 download failed:', e.message); process.exit(1); });
         "

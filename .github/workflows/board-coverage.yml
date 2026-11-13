@@ -1,0 +1,147 @@
+name: Board Coverage Capture
+
+# AGG-CANDIDATEB-MARKER-CAPTURE-1 Stage 1 (design AGG_CANDIDATEB_MARKER_DESIGN_2026-11-03 §4 D5-D7):
+# daily harvest of existing lane metadata artifacts + tracked-universe join ->
+# R2 data/board-coverage.json (schema board-coverage-v1). ZERO probe fetches: this
+# workflow performs no outbound HTTP to any board; its only network I/O is R2/Storage
+# artifact reads and the artifact write. Trigger policy (AGG_CONTRACT.md
+# AGG-WORKFLOW-DISPATCH-AUDIT-1): pattern 1 self-sufficient daily schedule
+# (low-frequency cadence -> plain GHA cron adequate per AGG-CONTRACT-CRON-FREQUENCY-GAP-1);
+# workflow_dispatch below is the manual operator tool (pattern 4, commented intent).
+
+on:
+  schedule:
+    - cron: '55 5 * * *'
+  workflow_dispatch: # manual operator tool: on-demand capture (e.g. post-lane-landing verification)
+
+concurrency:
+  group: board-coverage
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          submodules: recursive
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Install transcrypt
+        run: |
+          curl -sSL https://raw.githubusercontent.com/elasticdog/transcrypt/5effa13/transcrypt -o /tmp/transcrypt
+          chmod +x /tmp/transcrypt
+          sudo mv /tmp/transcrypt /usr/local/bin/transcrypt
+
+      - name: Unlock encrypted files
+        # company-list.json inside the pinned aggregator submodule is transcrypt-encrypted.
+        run: |
+          echo "Y" | transcrypt --cipher aes-256-cbc --password "$TRANSCRYPT_PASSWORD" --force
+          git checkout -- .
+          git submodule foreach --recursive '
+            echo "Y" | transcrypt --cipher aes-256-cbc --password "'"$TRANSCRYPT_PASSWORD"'" --force 2>/dev/null || true
+            rm -f "$(git rev-parse --gitdir)/index" 2>/dev/null || true
+            git checkout HEAD -- . 2>/dev/null || true
+          ' || true
+        env:
+          TRANSCRYPT_PASSWORD: ${{ secrets.TRANSCRYPT_PASSWORD }}
+
+      - name: Fix submodule index
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --force --recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create data directory
+        run: mkdir -p .github/data
+
+      - name: Download harvest inputs from R2
+        # Soft-miss per artifact EXCEPT all_jobs.json: lane/cursor/wd/metadata absence
+        # degrades coverage honestly (totals fall to tracked_without_totals, loud lines);
+        # pool absence would fabricate the served join — the builder aborts on it anyway,
+        # so we fail the step here with the same verdict.
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: |
+          node -e "
+          const { createR2Client } = require('./.github/scripts/aggregator/lib/storage/r2-client');
+          const soft = [
+            'supplemental-trakstar-metadata.json',
+            'supplemental-jazzhr-metadata.json',
+            'supplemental-adp-metadata.json',
+            'eightfold-cursor.json',
+            'wd-totals-cache.json',
+            'jobs-metadata.json',
+          ];
+          async function main() {
+            const r2 = createR2Client({ prefix: 'data/' });
+            for (const key of soft) {
+              try { await r2.downloadToFile(key, '.github/data/' + key); console.log('✅ Downloaded ' + key); }
+              catch (e) { console.log('ℹ️ ' + key + ' not on R2 (' + e.message + ') — coverage degrades honestly for its tenants'); }
+            }
+            try {
+              await r2.downloadToFile('all_jobs.json', '.github/data/all_jobs.json');
+              console.log('✅ Downloaded all_jobs.json (pool served-presence join)');
+            } catch (e) {
+              console.error('❌ all_jobs.json download failed: ' + e.message + ' — served join would fabricate; aborting');
+              process.exit(1);
+            }
+          }
+          main().catch(e => { console.error('❌ R2 download failed:', e.message); process.exit(1); });
+          "
+
+      - name: Download CSV ledger from Storage
+        # decay-monitor / competitor-snapshot pattern (SUP-owned ledger, read-only here)
+        run: |
+          curl -sf --retry 3 --retry-delay 15 --retry-all-errors \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -o company-research-log.csv \
+            "https://xxmhgagpbxjflajoaahy.supabase.co/storage/v1/object/pipeline-data/company-research-log.csv" \
+            || { echo "❌ company-research-log.csv download failed — tracked-universe ledger leg is required; aborting"; exit 1; }
+          wc -l company-research-log.csv
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+      - name: Build + upload board-coverage.json (R2 canonical)
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: |
+          node .github/scripts/build-board-coverage.js --csv company-research-log.csv
+
+      - name: Upload board-coverage.json to Storage (backup)
+        # Storage law: R2 canonical (already written, fatal-on-fail above); Storage is
+        # backup, non-fatal on exhaustion (AGG-MARKER-STORAGE-RETRY-1 ordering).
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          curl -sf --retry 3 --retry-delay 15 --retry-all-errors -X PUT \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/json" \
+            --data-binary @.github/data/board-coverage.json \
+            "${SUPABASE_URL}/storage/v1/object/pipeline-data/board-coverage.json" \
+            && echo "✅ Uploaded board-coverage.json to Storage (backup)" \
+            || echo "⚠️ board-coverage.json Storage backup failed (non-critical; R2 canonical)"
