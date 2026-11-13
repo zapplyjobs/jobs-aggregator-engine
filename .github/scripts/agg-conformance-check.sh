@@ -100,7 +100,11 @@ def parse_iso(v):
         return None
     try:
         if ISO_RE.match(v):
-            return datetime.fromisoformat(v.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+            # offset-less ISO timestamps (new lane data shape) parse naive; the contract
+            # anchor semantics are UTC (AGG-PHENOM-POSTEDAT-PARSE-1) - normalize so
+            # comparisons against the aware `now` cannot raise.
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
         if DATE_RE.match(v):
             return datetime.fromisoformat(v).replace(tzinfo=timezone.utc)
     except ValueError:
@@ -276,6 +280,16 @@ SELFTEST_CASES = [
     ("currency shape", mutate(GOOD_ROW, salaryCurrency="us$"), ["SALARY_CURRENCY_SHAPE"]),
     ("id undefined segment", mutate(GOOD_ROW, id="oracle-undefined-23026"), ["ID_UNDEFINED_SEGMENT"]),
     ("anchor_ts missing", mutate(GOOD_ROW, anchor_ts="__DEL__"), ["ANCHOR_TS_MISSING"]),
+    # AGG-CONFCHECK-DTCRASH-1: offset-less (naive) ISO stamps from new-lane sources
+    # (live pool: adp cohort) must normalize to aware UTC at the single parse_iso
+    # site — the pre-fix checker raised TypeError comparing them against aware
+    # anchor_ts/now. These arms crash any checker that returns naive datetimes.
+    ("posted_at naive offset-less ISO (AGG-CONFCHECK-DTCRASH-1, cmp site)",
+     mutate(GOOD_ROW, posted_at=(datetime.now(timezone.utc) - timedelta(days=4)).strftime("%Y-%m-%dT%H:%M:%S")), []),
+    ("anchor_ts naive offset-less ISO (AGG-CONFCHECK-DTCRASH-1, cmp site)",
+     mutate(GOOD_ROW, anchor_ts=(datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%S")), []),
+    ("anchor_ts naive, posted_at unparseable (AGG-CONFCHECK-DTCRASH-1, age site)",
+     mutate(GOOD_ROW, anchor_ts=(datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%S"), posted_at="whenever"), ["POSTED_AT_UNPARSEABLE"]),
     ("application_deadline ISO accepted (AGG-VALIDTHROUGH-DEADLINE-1)", mutate(GOOD_ROW, application_deadline="2026-11-15T23:59:59.000Z"), []),
     ("application_deadline non-ISO rejected", mutate(GOOD_ROW, application_deadline="Nov 15th"), ["APPLICATION_DEADLINE_NOT_ISO"]),
     ("application_deadline wrong type rejected", mutate(GOOD_ROW, application_deadline=1731600000000), ["APPLICATION_DEADLINE_TYPE"]),
