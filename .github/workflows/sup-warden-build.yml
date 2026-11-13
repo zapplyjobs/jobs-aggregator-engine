@@ -51,7 +51,6 @@ jobs:
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
 
       - name: Download previous silent-state from R2 (rolling snapshot; age honesty)
-        continue-on-error: true
         run: |
           pip install boto3 -q
           python3 -c "import boto3, os; s3 = boto3.client('s3', region_name='auto', endpoint_url=os.environ['R2_ENDPOINT'], aws_access_key_id=os.environ['R2_ACCESS_KEY_ID'], aws_secret_access_key=os.environ['R2_SECRET_ACCESS_KEY']); s3.download_file(os.environ['R2_BUCKET_NAME'], 'data/warden_silent_state.json', 'warden_silent_state.json'); print('previous silent state downloaded')"
