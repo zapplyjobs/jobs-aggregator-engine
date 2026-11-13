@@ -4,7 +4,7 @@
   "description": "Zapply job aggregation pipeline",
   "main": ".github/scripts/index.js",
   "scripts": {
-    "test": "node .github/scripts/index.js --dry-run"
+    "test": "bash .github/scripts/test.sh"
   },
   "keywords": [
     "jobs",
