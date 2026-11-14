@@ -5,8 +5,9 @@ name: Board Coverage Capture
 # R2 data/board-coverage.json (schema board-coverage-v1). ZERO probe fetches: this
 # workflow performs no outbound HTTP to any board; its only network I/O is R2/Storage
 # artifact reads and the artifact write. Trigger policy (AGG_CONTRACT.md
-# AGG-WORKFLOW-DISPATCH-AUDIT-1): pattern 1 self-sufficient daily schedule
-# (low-frequency cadence -> plain GHA cron adequate per AGG-CONTRACT-CRON-FREQUENCY-GAP-1);
+# AGG-WORKFLOW-DISPATCH-AUDIT-1): the schedule side is PAUSED (see below) - the
+# workflow is currently dispatch-only (pattern 4); if the schedule returns it is
+# pattern 1 (low-frequency cadence -> plain GHA cron adequate per AGG-CONTRACT-CRON-FREQUENCY-GAP-1).
 # workflow_dispatch below is the manual operator tool (pattern 4, commented intent).
 
 # Schedule PAUSED 2026-11-13 (row OUT-COVERED-BADGE-REJECTED-1): the artifact is
