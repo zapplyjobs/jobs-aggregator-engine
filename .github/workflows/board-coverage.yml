@@ -9,9 +9,14 @@ name: Board Coverage Capture
 # (low-frequency cadence -> plain GHA cron adequate per AGG-CONTRACT-CRON-FREQUENCY-GAP-1);
 # workflow_dispatch below is the manual operator tool (pattern 4, commented intent).
 
+# Schedule PAUSED 2026-11-13 (row OUT-COVERED-BADGE-REJECTED-1): the artifact is
+# unconsumed since the render rejection + the citation basis moved to pool-derived
+# distinct companies. Re-enable the cron ('55 5 * * *') when the
+# app.zapply.jobs citation consumer exists. The `schedule:` key must stay ABSENT
+# (not merely commented out) while paused: a null-valued event key makes the
+# workflow file invalid and every push fails this check at 0s (A341 red-noise fix).
+
 on:
-  schedule:
-    # - cron: '55 5 * * *'  # paused 2026-11-13: artifact unconsumed (operator rejected render; basis moved to pool-derived) - manual workflow_dispatch retained per trigger policy
   workflow_dispatch: # manual operator tool: on-demand capture (e.g. post-lane-landing verification)
 
 concurrency:
