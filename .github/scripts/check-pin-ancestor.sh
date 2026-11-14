@@ -10,8 +10,17 @@
 #       pins the older SHA (09bfdd06: message claimed 8f42f67, tree kept
 #       639abacd; the stale-index no-op bump that left the pin 62h behind
 #       engine main). A mention that resolves NOWHERE is ignored (falls
-#       through to rule b) - the original "orphan fail" wording oversold this;
-#       the code fails only when >=1 mention resolves and none matches.
+#       through to rule b) - this holds for BOTH the 40-hex and the short-SHA
+#       loop (real bump commits cite 7-8-char SHAs: bump-submodule.yml uses
+#       $SHORT_SHA; a 40-hex-only requirement would false-fail every legit
+#       bump). A wrong-but-real mention still fails (it resolves, none match).
+#       ESCAPE: with [pin-rollback-ok] in the message, a rule-(a) mismatch is
+#       not fatal by itself - the guard runs the ancestry check inline and
+#       passes ONLY if the pin change is actually BACKWARD. This is what
+#       makes the escape hatch reachable for real `git revert` messages,
+#       which quote the bump SHA (Revert "chore: bump consumer to X") - this
+#       estate's actual rollbacks (0830634/39f46c5) are exactly that shape.
+#       A forward bump with a mismatched SHA is NOT saved by the marker.
 #   (b) ANCESTRY: the new pin must not be an ANCESTOR of the previous pin
 #       (silent backward pins - >=10 historical instances). Escape:
 #       [pin-rollback-ok] in the HEAD message (acknowledged rollback).
@@ -21,7 +30,8 @@
 #       the loop only covered the aggregator pin.
 #   PASS cases: pin hold; pin absent from the commit; forward advance;
 #   amend/rebase pairs (neither is the other's ancestor); messages without any
-#   hex SHA (non-bump commits).
+#   hex SHA (non-bump commits); acknowledged backward rollbacks (marker +
+#   actually-backward, by rule a or rule b).
 # Per-pin verdicts are all reported ("PASS [job-board-consumer]: ..."); the
 # script exits nonzero if ANY pin fails.
 # Runs after checkout; HEAD~1 must exist (gate checkout uses fetch-depth: 2).
@@ -31,6 +41,15 @@
 set -euo pipefail
 
 fail() { echo "::error::$1"; return 1; }
+
+# is_backward EGIT OLD NEW: 0 iff NEW is a strict ancestor of OLD (a real
+# backward pin move). Unresolvable pins or identical pins are not backward.
+is_backward() {
+  local egit="$1" old="$2" new="$3"
+  [ -n "$old" ] && [ "$old" != "$new" ] || return 1
+  $egit fetch origin "$old" "$new" >/dev/null 2>&1 || return 1
+  $egit merge-base --is-ancestor "$new" "$old"
+}
 
 check_pin() { # <pin-path> <label> <head-message>
   local pin_path="$1" label="$2" msg="$3"
@@ -43,8 +62,12 @@ check_pin() { # <pin-path> <label> <head-message>
   local egit="git --git-dir=$store/.git"
 
   local old new
-  old=$(git ls-tree HEAD~1 -- "$pin_path" | awk '{print $3}')
-  new=$(git ls-tree HEAD -- "$pin_path" | awk '{print $3}')
+  old=$(git ls-tree HEAD~1 -- "$pin_path" | awk '{print $3}') || {
+    fail "[$label] Cannot read the previous pin (git ls-tree HEAD~1 $pin_path failed)."; return
+  }
+  new=$(git ls-tree HEAD -- "$pin_path" | awk '{print $3}') || {
+    fail "[$label] Cannot read the current pin (git ls-tree HEAD $pin_path failed)."; return
+  }
   if [ -z "$new" ]; then
     echo "PASS [$label]: pin absent from this commit (not a pin change)"
     return 0
@@ -55,14 +78,24 @@ check_pin() { # <pin-path> <label> <head-message>
   fi
 
   # (a) message-tree agreement: resolve every mentioned SHA in this pin's
-  # store; the tree pin must match at least one (full-SHA mentions match by
-  # prefix; 7-char claims are expanded on the store).
+  # store; the tree pin must match at least one (short claims are expanded on
+  # the store - bump messages cite short SHAs). A mention that resolves
+  # nowhere is ignored. On a mismatch, [pin-rollback-ok] upgrades the verdict
+  # to "acknowledged rollback" ONLY if the pin move is actually backward
+  # (real git revert messages quote the bump SHA; see header).
   if grep -qE '\b[0-9a-f]{7,40}\b' <<<"$msg"; then
     local match=0 resolved_any=0 claimed full
     for claimed in $(grep -oE '\b[0-9a-f]{40}\b' <<<"$msg" | sort -u); do
-      resolved_any=1
-      full=$($egit rev-parse --verify --quiet "$claimed" || true)
-      if [ -n "$full" ] && [ "$new" = "$full" ]; then match=1; fi
+      # rev-parse --verify alone ECHOES any syntactically-valid full SHA with
+      # exit 0 even when the object is absent from this store (verified:
+      # rev-parse rc=0 on a garbage SHA that cat-file does not list). ^{object}
+      # forces the store lookup, so a mention living only in the OTHER pin's
+      # store does not count as resolved here.
+      full=$($egit rev-parse --verify --quiet "${claimed}^{object}" || true)
+      if [ -n "$full" ]; then
+        resolved_any=1
+        [ "$new" = "$full" ] && match=1
+      fi
     done
     for claimed in $(grep -oE '\b[0-9a-f]{7,39}\b' <<<"$msg" | sort -u); do
       full=$($egit rev-parse --verify --quiet "$claimed" || true)
@@ -72,6 +105,10 @@ check_pin() { # <pin-path> <label> <head-message>
       fi
     done
     if [ "$resolved_any" = "1" ] && [ "$match" = "0" ]; then
+      if grep -q '\[pin-rollback-ok\]' <<<"$msg" && is_backward "$egit" "$old" "$new"; then
+        echo "PASS [$label]: acknowledged pin rollback to ${new:0:8} ([pin-rollback-ok])"
+        return 0
+      fi
       fail "[$label] Pin/message mismatch: commit mentions ${label} SHA(s) but the tree pins ${new:0:8}. Fix the pin (bump to the intended commit) or remove the stale SHA from the message." || return
     fi
   fi
