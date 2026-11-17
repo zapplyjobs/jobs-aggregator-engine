@@ -3,23 +3,15 @@
 # self-sufficient — low-frequency guidance per AGG-CONTRACT-CRON-FREQUENCY-GAP-1:
 # schedule alone is adequate at hourly cadence; no CF-Worker dual-trigger, which
 # also sidesteps the currently-dead worker chain entirely) + workflow_dispatch
-# (manual runs). The push trigger is the branch-proof vehicle ONLY: scoped to the
-# wire branch + this file, it fires exactly one lane run per proof push while the
-# file lives only on the topic branch (workflow IDs resolve from the default
-# branch, so a not-yet-landed workflow cannot be dispatched by name). After
-# landing it is dead code (the scoped branch stops being pushed) and can be
-# dropped in a post-landing cleanup; do NOT read it as a cadence.
+# (manual runs). The branch-proof push vehicle was dropped at landing per
+# AdversaryBrassRing F1 (was: scoped to the wire branch + this file; dead code
+# once the workflow lives on the default branch).
 name: Supplemental Ingest 8
 
 on:
   workflow_dispatch:
   schedule:
     - cron: '3 * * * *'
-  push:
-    branches:
-      - 'agg/brassring-ga-wire-consumer'
-    paths:
-      - '.github/workflows/fetch-supplemental-8.yml'
 
 concurrency:
   group: fetch-brassring-supplemental
