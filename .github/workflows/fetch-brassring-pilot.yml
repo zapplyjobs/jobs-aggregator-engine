@@ -41,7 +41,10 @@ jobs:
     env:
       NODE_OPTIONS: --max-old-space-size=4096
       # Per-source budget caps (Product Logic Gate posture; defaults in the driver,
-      # overridable here without a code change).
+      # overridable here without a code change). BRASSRING_TENANT_BUDGET counts
+      # LOGICAL page calls: shared-law retries can multiply wire attempts (clamp
+      # {1..4}, 30s backoff cap, per-request timeout) — worst case ~880 wire
+      # requests/tenant, self-terminating inside the walk.
       BRASSRING_TENANT_BUDGET: '220'
       BRASSRING_MAX_PAGES_PER_PASS: '120'
       BRASSRING_PACING_MS: '1000'
