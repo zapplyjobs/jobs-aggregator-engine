@@ -57,9 +57,28 @@ jobs:
           submodules: recursive
           token: ${{ secrets.GH_PAT }}
 
-      # No transcrypt unlock step: the pilot driver reads NO encrypted config
-      # (company-list.json is SUP-owned and deliberately untouched — tenant pins
-      # are in fetch-brassring-pilot.js).
+      - name: Install transcrypt
+        run: |
+          curl -sSL https://raw.githubusercontent.com/elasticdog/transcrypt/5effa13/transcrypt -o /tmp/transcrypt
+          chmod +x /tmp/transcrypt
+          sudo mv /tmp/transcrypt /usr/local/bin/transcrypt
+
+      # MANDATORY: both repos encrypt *.js/*.json at rest (gitattributes crypt
+      # filter) — without the unlock, checkout serves ciphertext and node dies
+      # with SyntaxError at line 1 (run 43997594250 failure basis). Mirrors the
+      # lane-workflow unlock shape (fetch-supplemental-6.yml): root + every
+      # submodule (the brassring fetcher lives in the aggregator submodule).
+      - name: Unlock encrypted files
+        run: |
+          echo "Y" | transcrypt --cipher aes-256-cbc --password "$TRANSCRYPT_PASSWORD" --force
+          git checkout -- .
+          git submodule foreach --recursive '
+            echo "Y" | transcrypt --cipher aes-256-cbc --password "'"$TRANSCRYPT_PASSWORD"'" --force 2>/dev/null || true
+            rm -f "$(git rev-parse --git-dir)/index" 2>/dev/null || true
+            git checkout HEAD -- . 2>/dev/null || true
+          ' || true
+        env:
+          TRANSCRYPT_PASSWORD: ${{ secrets.TRANSCRYPT_PASSWORD }}
 
       - name: Fix submodule index
         run: |
