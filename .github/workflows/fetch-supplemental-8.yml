@@ -17,7 +17,7 @@ on:
     - cron: '3 * * * *'
   push:
     branches:
-      - 'agg/brassring-ga-wire'
+      - 'agg/brassring-ga-wire-consumer'
     paths:
       - '.github/workflows/fetch-supplemental-8.yml'
 
