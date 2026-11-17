@@ -1,11 +1,18 @@
 # BrassRing GA+BAE pilot lane (PIPE-20 step 3/4; rev2 design packet, 2026-11-16).
 #
-# Trigger policy (AGG-WORKFLOW-DISPATCH-AUDIT-1) option 4: workflow_dispatch-only
-# is acceptable for manual/operator tools WHEN the intent is commented at the top
-# of the file. THIS IS THE INTENT COMMENT: this workflow is the branch-scoped
-# PILOT PROOF vehicle — production cadence (schedule / wave-link per the policy)
-# is deliberately NOT wired until the Adversary diff verdict passes the merge
-# gate. Do NOT add a cron or a dispatcher rider here.
+# Trigger policy (AGG-WORKFLOW-DISPATCH-AUDIT-1): this file carries TWO triggers,
+# both with intent commented:
+#   1. workflow_dispatch — the production-facing manual/operator entry (option 4,
+#      acceptable for manual tools with this comment). NOTE: until this file lands
+#      on the default branch, `gh workflow run` CANNOT resolve it (workflow IDs
+#      resolve from the default branch), so the branch-scoped proof run uses the
+#      push trigger below.
+#   2. push (this branch, this file only) — the branch-scoped PROOF vehicle
+#      (option 3, code-change-triggered): pushing the pilot branch fires exactly
+#      one run of the pilot lane at the branch ref. Production cadence (schedule /
+#      wave-link per the policy) is deliberately NOT wired until the Adversary
+#      diff verdict passes the merge gate. Do NOT add a cron or a dispatcher
+#      rider here, and do NOT read the push trigger as a cadence.
 #
 # Pool boundary: this lane writes brassring-pilot-* R2 artifacts only. It is NOT
 # registered in index.js supplementalInputs — nothing in this run can touch
@@ -14,6 +21,11 @@ name: BrassRing Pilot Lane
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - 'agg/brassring-pilot-consumer'
+    paths:
+      - '.github/workflows/fetch-brassring-pilot.yml'
 
 concurrency:
   group: fetch-brassring-pilot
