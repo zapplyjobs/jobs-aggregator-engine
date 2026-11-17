@@ -1,0 +1,102 @@
+#
+# Trigger (AGG-WORKFLOW-DISPATCH-AUDIT-1): hourly GHA schedule (option 1,
+# self-sufficient — low-frequency guidance per AGG-CONTRACT-CRON-FREQUENCY-GAP-1:
+# schedule alone is adequate at hourly cadence; no CF-Worker dual-trigger, which
+# also sidesteps the currently-dead worker chain entirely) + workflow_dispatch
+# (manual runs). The push trigger is the branch-proof vehicle ONLY: scoped to the
+# wire branch + this file, it fires exactly one lane run per proof push while the
+# file lives only on the topic branch (workflow IDs resolve from the default
+# branch, so a not-yet-landed workflow cannot be dispatched by name). After
+# landing it is dead code (the scoped branch stops being pushed) and can be
+# dropped in a post-landing cleanup; do NOT read it as a cadence.
+name: Supplemental Ingest 8
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '3 * * * *'
+  push:
+    branches:
+      - 'agg/brassring-ga-wire'
+    paths:
+      - '.github/workflows/fetch-supplemental-8.yml'
+
+concurrency:
+  group: fetch-brassring-supplemental
+  cancel-in-progress: false
+
+jobs:
+  fetch-brassring-supplemental:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      # Per-source budget caps (Product Logic Gate posture; defaults in the
+      # driver, overridable here without a code change). BRASSRING_TENANT_BUDGET
+      # counts LOGICAL page calls: shared-law retries can multiply wire attempts
+      # (clamp {1..4}, 30s backoff cap, per-request timeout) — measured GA run:
+      # 39-92 wire requests; worst-case bound ~880/tenant, self-terminating.
+      BRASSRING_TENANT_BUDGET: '220'
+      BRASSRING_MAX_PAGES_PER_PASS: '120'
+      BRASSRING_PACING_MS: '1000'
+      BRASSRING_MAX_RETRIES: '3'
+      BRASSRING_TIMEOUT_MS: '30000'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 1
+          submodules: recursive
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Install transcrypt
+        run: |
+          curl -sSL https://raw.githubusercontent.com/elasticdog/transcrypt/5effa13/transcrypt -o /tmp/transcrypt
+          chmod +x /tmp/transcrypt
+          sudo mv /tmp/transcrypt /usr/local/bin/transcrypt
+
+      # MANDATORY: both repos encrypt *.js/*.json at rest (gitattributes crypt
+      # filter) — an unlocked runner checkout serves ciphertext and node dies at
+      # line 1 (run 43997594250 failure basis). The brassring fetcher lives in
+      # the aggregator submodule; unlock root + every submodule (sibling shape).
+      - name: Unlock encrypted files
+        run: |
+          echo "Y" | transcrypt --cipher aes-256-cbc --password "$TRANSCRYPT_PASSWORD" --force
+          git checkout -- .
+          git submodule foreach --recursive '
+            echo "Y" | transcrypt --cipher aes-256-cbc --password "'"$TRANSCRYPT_PASSWORD"'" --force 2>/dev/null || true
+            rm -f "$(git rev-parse --git-dir)/index" 2>/dev/null || true
+            git checkout HEAD -- . 2>/dev/null || true
+          ' || true
+        env:
+          TRANSCRYPT_PASSWORD: ${{ secrets.TRANSCRYPT_PASSWORD }}
+
+      - name: Fix submodule index
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --force --recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create data directory
+        run: mkdir -p .github/data
+
+      - name: Fetch BrassRing jobs
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: node .github/scripts/fetch-supplemental-brassring.js
