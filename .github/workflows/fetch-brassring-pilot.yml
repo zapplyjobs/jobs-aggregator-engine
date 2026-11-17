@@ -1,0 +1,75 @@
+# BrassRing GA+BAE pilot lane (PIPE-20 step 3/4; rev2 design packet, 2026-11-16).
+#
+# Trigger policy (AGG-WORKFLOW-DISPATCH-AUDIT-1) option 4: workflow_dispatch-only
+# is acceptable for manual/operator tools WHEN the intent is commented at the top
+# of the file. THIS IS THE INTENT COMMENT: this workflow is the branch-scoped
+# PILOT PROOF vehicle — production cadence (schedule / wave-link per the policy)
+# is deliberately NOT wired until the Adversary diff verdict passes the merge
+# gate. Do NOT add a cron or a dispatcher rider here.
+#
+# Pool boundary: this lane writes brassring-pilot-* R2 artifacts only. It is NOT
+# registered in index.js supplementalInputs — nothing in this run can touch
+# all_jobs.json (lane isolation; pool impact bounded by design).
+name: BrassRing Pilot Lane
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: fetch-brassring-pilot
+  cancel-in-progress: false
+
+jobs:
+  fetch-brassring-pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      # Per-source budget caps (Product Logic Gate posture; defaults in the driver,
+      # overridable here without a code change).
+      BRASSRING_TENANT_BUDGET: '220'
+      BRASSRING_MAX_PAGES_PER_PASS: '120'
+      BRASSRING_PACING_MS: '1000'
+      BRASSRING_MAX_RETRIES: '3'
+      BRASSRING_TIMEOUT_MS: '30000'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 1
+          submodules: recursive
+          token: ${{ secrets.GH_PAT }}
+
+      # No transcrypt unlock step: the pilot driver reads NO encrypted config
+      # (company-list.json is SUP-owned and deliberately untouched — tenant pins
+      # are in fetch-brassring-pilot.js).
+
+      - name: Fix submodule index
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --force --recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create data directory
+        run: mkdir -p .github/data
+
+      - name: Fetch BrassRing pilot boards
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: node .github/scripts/fetch-brassring-pilot.js
