@@ -2,7 +2,9 @@
 """warden_queue.py - Warden kit queue builder + alarm filer (Desk 3: HEALTH). Reads the R2
 yield-decay monitor (~/.secrets/r2-zjp.env, bucket zjp-data), merges the zero-output list
 (flag company_missing_from_final_output), emits the ranked triage queue (oldest-first,
-owner-tagged) as JSON artifact + readable table. Hard gates: monitor schema_version==2,
+owner-tagged) as JSON artifact + readable table. Hard gates: monitor schema_version>=2
+(additive-version convention: producer bumps on additive change, consumers read >=2 - v3 =
+AGG-CANDIDATEB-MARKER-CAPTURE-1 D3 marker_exclusions, 2026-11-12 ae1d1bb),
 expected flag key present, summary count == ingested rows, monitor <=48h old (ages computed
 against monitor generated_at), no null-age rows. Alarms: SUP-owned companies zero-output
 >7d or queue>50 -> file/update todo task SUP-WARDEN-ALARM-1 (open rows only, dated note
@@ -198,9 +200,9 @@ def monitor_time(monitor):
 
 def check_monitor(monitor, now=None):
     """Hard-fail on schema drift or a stale monitor (false-green guard)."""
-    if monitor.get("schema_version") != 2:
-        sys.exit(f"ERROR: monitor schema_version={monitor.get('schema_version')!r}, kit expects 2 - "
-                 f"inspect {MONITOR_KEY} before triage")
+    if int(monitor.get("schema_version") or 0) < 2:
+        sys.exit(f"ERROR: monitor schema_version={monitor.get('schema_version')!r}, kit reads >=2 (additive "
+                 f"convention) - inspect {MONITOR_KEY} before triage")
     if ZERO_FLAG not in (monitor.get("summary", {}).get("by_flag") or {}):
         sys.exit(f"ERROR: expected flag '{ZERO_FLAG}' missing from summary.by_flag - monitor schema drift")
     now = now or datetime.now(timezone.utc)
@@ -700,7 +702,8 @@ def self_test():
                                      flag("selftest-e", 10, basis="company_name")]}
     tmp = Path("/tmp/warden_queue_selftest.json")
     check_monitor(monitor, now=mon_now)
-    for bad in [dict(monitor, schema_version=3), dict(monitor, generated_at="2026-10-01T00:00:00Z"),
+    check_monitor(dict(monitor, schema_version=3), now=mon_now)  # additive v3 accepted (2026-11-16 monitor)
+    for bad in [dict(monitor, schema_version=1), dict(monitor, generated_at="2026-10-01T00:00:00Z"),
                 {**monitor, "summary": {"by_flag": {"other_flag": 1}}}]:
         try:
             check_monitor(bad, now=mon_now)
