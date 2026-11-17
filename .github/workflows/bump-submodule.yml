@@ -18,7 +18,12 @@ on:
         type: string
 
 concurrency:
-  group: bump-submodule
+  # Repo-scoped (INF-BUMPSUB-QUEUE-EVICTION-1): the single shared group let any
+  # newer dispatch CANCEL queued older bumps for unrelated submodules (4 bumps
+  # raced 11-15 00:35-00:38Z; queued shared/processing bumps 2083/2084 were
+  # evicted while the dispatchers had already reported success). One run per
+  # submodule at a time; different submodules no longer collide.
+  group: bump-submodule-${{ inputs.submodule_name }}
   cancel-in-progress: false
 
 env:
