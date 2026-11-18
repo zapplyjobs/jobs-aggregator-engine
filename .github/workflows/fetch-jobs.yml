@@ -7,10 +7,16 @@ on:
         description: 'AGG-B2 drill lever: override the degrade cap in minutes (default 20 = production; a value like 2 trips the latch on a healthy run for an end-to-end degrade drill - publishes a degraded-but-complete artifact, self-heals next run)'
         required: false
         default: '20'
-  # schedule REMOVED (INF-FETCHJOBS-DUAL-TRIGGER-1): the CF Worker job-board-cron-worker
-  # (observed dispatch every 10 min as of 2026-09-06, with hasActiveWorkflowRun guard) is the
-  # SOLE trigger. GHA schedule caused a dual-trigger that doubled dispatches + piled the
-  # throttled queue (ghost-throttle P0).
+  # Dual-trigger restored 2026-11-18 (lead ruling on AGG-WORKFLOW-DISPATCH-AUDIT-1):
+  # AGG-CONTRACT-CRON-FREQUENCY-GAP-1 puts <=15-min cadence lanes in the dual-trigger class
+  # (schedule: + CF Worker workflow_dispatch; desc-backfill precedent green since 2026-10-10).
+  # Supersedes the INF-FETCHJOBS-DUAL-TRIGGER-1 removal (2026-08-07): that removed the schedule
+  # into the ghost-throttle P0's jammed queue (~19 uncancellable ghosts + runner starvation);
+  # pathology resolved since (job-fetch-v2 cancel-in-progress:false serializes overlap; Worker
+  # hasActiveWorkflowRun guard counts scheduled runs active). A343 2026-11-17: worker GH_PAT
+  # binding death left this lane with zero automated cover — schedule is the fallback leg.
+  schedule:
+    - cron: '*/12 * * * *'
 
 # Prevent concurrent runs
 concurrency:
