@@ -16,7 +16,7 @@ on:
   # hasActiveWorkflowRun guard counts scheduled runs active). A343 2026-11-17: worker GH_PAT
   # binding death left this lane with zero automated cover — schedule is the fallback leg.
   schedule:
-    - cron: '*/12 * * * *'
+    - cron: '*/30 * * * *'  # INF-1065 ReReviewSeat2: floor relaxed - schedule runs p50 11.5min vs */12 cadence occupied the lane ~95pct, squeezing the healthy worker leg (dispatch gaps p50 10->25min); */30 keeps worst-case staleness 30min < the 45min detector bar
 
 # Prevent concurrent runs
 concurrency:
