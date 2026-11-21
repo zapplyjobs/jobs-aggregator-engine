@@ -276,9 +276,12 @@ jobs:
             const WD_GATE = '/tmp/wd-gate-' + process.env.GITHUB_RUN_ID + '-' + process.env.GITHUB_RUN_ATTEMPT + '.json';
             if (!fs.existsSync(queuePath)) {
               // AGG-WD-SIDECAR-CLOBBER-FIX-1: a skipped WD fetch writes the gate log so
-              // the verify step can distinguish "nothing written, nothing at risk" from
-              // "fetch crashed before reporting" (missing log = fail-closed). Run-scoped
-              // filename: a reused runner's leftover state is never read (Adversary C2).
+              // the verify step can tell NOTHING-WRITTEN-AT-RISK apart from FETCH-CRASHED-
+              // BEFORE-REPORTING (missing log = fail-closed). Run-scoped filename: a reused
+              // runner never reads leftover state (Adversary C2). NOTE: comments inside a
+              // node -e double-quoted bash string must avoid embedded double quotes — they
+              // terminate the bash string and truncate the script (2026-11-21 consumed-run
+              // SyntaxError; the fleet lint checks backticks but not this class).
               console.log('No WD queue — skipping WD backfill');
               fs.writeFileSync(WD_GATE, JSON.stringify({ skipped: 'no_queue', run_id: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT, ts: new Date().toISOString() }));
               return;
