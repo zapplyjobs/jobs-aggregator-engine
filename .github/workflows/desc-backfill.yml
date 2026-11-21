@@ -72,6 +72,52 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+      - name: "Acquire sidecar write lock (AGG-WD-SIDECAR-CLOBBER-FIX-1 L2 single-flight)"
+        # R2-resident atomic lock: acquire via conditional PUT (If-None-Match:*), TTL +
+        # stale-owner takeover via If-Match CAS inside acquireLock. Covers cron AND
+        # Worker-dispatched runs (the Worker's hasActiveWorkflowRun busy-guard covers
+        # only its own dispatch loop; the GHA concurrency group queues same-workflow
+        # runs — this lock makes single-flight explicit at the data layer and covers
+        # any non-GHA writer actor). Lock-held exits nonzero: a skipped tick must be
+        # VISIBLE (run conclusion=failure), and a lock held forever trips check-47
+        # liveness at 30min — a stall is loud by construction.
+        run: |
+          node -e "
+          const { createR2Client } = require('./.github/scripts/aggregator/lib/storage/r2-client');
+          async function main() {
+            const r2 = createR2Client({ prefix: 'data/' });
+            const res = await r2.acquireLock('locks/desc-backfill.lock', {
+              owner: String(process.env.GITHUB_RUN_ID),
+              actor: 'gha:desc-backfill/' + (process.env.GITHUB_EVENT_NAME || 'manual'),
+              ttlMs: 15 * 60 * 1000,
+            });
+            if (!res.acquired) {
+              // Adversary round-3 C3: contention must be distinguishable from real
+              // failure in triage. The run still fails loudly (exit-nonzero), and the
+              // run-scoped gate record carries skipped:'lock_held' + holder, which the
+              // completion marker folds into sidecar_gate (status stays 'failed' —
+              // agg-snapshot-gate.js:47 accepts only complete|in_progress|failed).
+              const fs = require('fs');
+              try {
+                fs.writeFileSync(`/tmp/wd-gate-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}.json`,
+                  JSON.stringify({ skipped: 'lock_held', holder: res.holder, expires_at: res.expires_at, run_id: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT, ts: new Date().toISOString() }));
+              } catch (_) { /* marker fold tolerates absence */ }
+              console.error('::error::[LOCK-HELD] desc-backfill lock held by ' + res.holder + ' until ' + res.expires_at + ' — this tick skips (single-flight, AGG-WD-SIDECAR-CLOBBER-FIX-1). Persistent hold trips check-47 producer liveness.');
+              process.exit(1);
+            }
+            console.log('Sidecar write lock ' + res.mode + (res.mode === 'takeover' ? ' (from stale owner ' + res.previous_owner + ')' : '') + ' — run ' + process.env.GITHUB_RUN_ID + ' owns the sidecar write.');
+          }
+          main().catch(e => { console.error('::error::[LOCK-ERROR] ' + e.message); process.exit(1); });
+          "
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+
       - name: "Mark sidecar generation in progress (AGG-DESCBACKFILL-MARKER-1)"
         run: |
           MARKER='{"status":"in_progress","run_id":"'"${GITHUB_RUN_ID}"'","started_at":"'"$(date -u +"%Y-%m-%dT%H:%M:%SZ")"'"}'
@@ -111,41 +157,86 @@ jobs:
           const { createR2Client } = require('./.github/scripts/aggregator/lib/storage/r2-client');
           const fs = require('fs');
           const r2 = createR2Client({ prefix: 'data/' });
+          // Adversary round-3 C2: run-scoped /tmp filenames — never read another
+          // attempt's leftover gate state on reused runners.
+          const GATE = `/tmp/desc-gate-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}.json`;
           async function dl(name, dest) {
             try { await r2.downloadToFile(name, dest); console.log('✅ ' + name + ': ' + fs.statSync(dest).size + ' bytes (R2)'); }
             catch(e) { console.log('⚠️ ' + name + ': ' + e.message); }
           }
           (async () => {
+            // all_jobs + queue are NOT sidecars: their lenient download keeps the old
+            // behavior (a failed pool seed = no prune, no queue, safe no-op paths).
             await dl('all_jobs.json', '.github/data/all_jobs.json');
             await dl('wd-desc-queue.jsonl', '.github/data/wd-desc-queue.jsonl');
-            // WD sidecar (may be chunked in R2 as -1.jsonl, -2.jsonl, etc.)
-            // AGG-WD-SIDECAR-LIFECYCLE-1 FIX: r2.downloadToFile returns NULL on a missing
-            // key (it does NOT throw), so the old try/catch chunk fallback was dead code —
-            // a missing single logged success and seeded 0 lines (observed 2026-08-14
-            // 19:46Z: seeded 0, wrote 2,500, clobbered the 8,111-entry chunks). Check the
-            // RESULT; fall back to chunks only when the single is genuinely absent.
-            fs.writeFileSync('.github/data/descriptions-workday.jsonl', '');
-            const single = await r2.downloadToFile('descriptions-workday.jsonl', '.github/data/descriptions-workday.jsonl');
+            // AGG-WD-SIDECAR-CLOBBER-FIX-1 (L1): the sidecar seed path is STRICT.
+            // downloadToFileStrict returns null ONLY on NoSuchKey/404 (genuinely
+            // absent); any transport failure THROWS and aborts this run BEFORE the
+            // fetch steps' compacted rewrite, so a failed chunk download can never
+            // ship a partial concat (the A346 clobber intake: the old lenient null
+            // made the chunk loop `break` on failure and ship a partial seed).
+            // Adversary round-3 C5: the chunk family is enumerated from the R2
+            // LISTING, not inferred from download-404s — a wiped/partial generation
+            // (e.g. chunk-1 gone, chunk-2 still present) must ABORT, never masquerade
+            // as a legit first-run bootstrap; and a hole in 1..N is an anomaly.
+            const single = await r2.downloadToFileStrict('descriptions-workday.jsonl', '.github/data/descriptions-workday.jsonl');
+            let seedMode;
             if (single) {
+              seedMode = 'single';
               console.log('✅ descriptions-workday: single file (R2, ' + single.size + ' bytes)');
             } else {
-              console.log('single descriptions-workday.jsonl absent — concatenating chunks');
-              for (let i = 1; i <= 24; i++) {
-                const c = await r2.downloadToFile('descriptions-workday-' + i + '.jsonl', '/tmp/wd-' + i + '.jsonl');
-                if (!c) break;
-                fs.appendFileSync('.github/data/descriptions-workday.jsonl', fs.readFileSync('/tmp/wd-' + i + '.jsonl'));
-                console.log('  WD chunk ' + i + ' (R2, ' + c.size + ' bytes)');
+              const wdObjects = (await r2.list('descriptions-workday'))
+                .map(o => o.key)
+                .filter(k => /^data\/descriptions-workday(-\d+)?\.jsonl$/.test(k));
+              const chunkNums = wdObjects
+                .map(k => (k.match(/^data\/descriptions-workday-(\d+)\.jsonl$/) || [])[1])
+                .filter(Boolean).map(Number).sort((a, b) => a - b);
+              if (chunkNums.length === 0 && wdObjects.length === 0) {
+                seedMode = 'bootstrap';
+                console.log('BOOTSTRAP seed: no single AND zero descriptions-workday objects in R2 (LIST-verified empty namespace) — legit empty/first-run layout, seed-establishment run (gate passes loudly, AGG-WD-SIDECAR-CLOBBER-FIX-1)');
+              } else if (chunkNums.length === 0) {
+                throw new Error('SEED-INTEGRITY: no single and no indexed chunks but unexpected descriptions-workday objects exist: ' + wdObjects.join(', '));
+              } else {
+                const expected = chunkNums.map((_, i) => i + 1);
+                if (chunkNums.length !== expected.length || chunkNums.some((n, i) => n !== expected[i])) {
+                  throw new Error('SEED-INTEGRITY: chunk family has holes or is not 1..N contiguous: [' + chunkNums.join(',') + ']');
+                }
+                seedMode = 'chunks';
+                console.log('single descriptions-workday.jsonl absent — concatenating ' + chunkNums.length + ' listed chunks [' + chunkNums.join(',') + ']');
+                for (const i of chunkNums) {
+                  const c = await r2.downloadToFileStrict('descriptions-workday-' + i + '.jsonl', '/tmp/wd-' + i + '.jsonl');
+                  if (!c) throw new Error('SEED-INTEGRITY: listed chunk ' + i + ' vanished between LIST and GET (torn generation) — aborting, never shipping a partial concat');
+                  fs.appendFileSync('.github/data/descriptions-workday.jsonl', fs.readFileSync('/tmp/wd-' + i + '.jsonl'));
+                  console.log('  WD chunk ' + i + ' (R2, ' + c.size + ' bytes)');
+                }
               }
             }
-            console.log('descriptions-workday: ' + fs.readFileSync('.github/data/descriptions-workday.jsonl','utf8').trim().split('\n').filter(Boolean).length + ' lines');
-            await dl('descriptions-smartrecruiters.jsonl', '.github/data/descriptions-smartrecruiters.jsonl');
-          })();
+            const wdSeedLines = fs.readFileSync('.github/data/descriptions-workday.jsonl', 'utf8').trim().split('\n').filter(Boolean).length;
+            console.log('descriptions-workday: ' + wdSeedLines + ' lines (seed_mode=' + seedMode + ')');
+            fs.writeFileSync(GATE, JSON.stringify({ seed_wd_entries_raw: wdSeedLines, seed_mode: seedMode, seed_ts: new Date().toISOString(), run_id: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT }));
+            // SR sidecar: same strict semantics — its compacted rewrite (fetchSRDescriptions
+            // -> writeSidecarCompacted) clobbers exactly the same way on a failed single-file
+            // seed. Absent single = bootstrap ONLY if the LIST is empty too (C5 symmetry).
+            const srAbsent = !(await r2.downloadToFileStrict('descriptions-smartrecruiters.jsonl', '.github/data/descriptions-smartrecruiters.jsonl'));
+            if (srAbsent) {
+              const srObjects = (await r2.list('descriptions-smartrecruiters')).length;
+              if (srObjects > 0) throw new Error('SEED-INTEGRITY: SR single absent but ' + srObjects + ' descriptions-smartrecruiters object(s) exist — anomalous layout, aborting');
+              fs.writeFileSync('.github/data/descriptions-smartrecruiters.jsonl', '');
+              console.log('descriptions-smartrecruiters LIST-verified absent in R2 — seeded empty (bootstrap)');
+            }
+          })().catch(e => {
+            console.error('::error::[SEED-ABORT] R2 sidecar seed failure (AGG-WD-SIDECAR-CLOBBER-FIX-1): ' + e.message);
+            console.error('Run aborted BEFORE the compacted sidecar rewrite — no partial seed ships; existing R2 sidecars untouched.');
+            process.exit(1);
+          });
           EOF
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
 
 
       - name: Fetch WD descriptions
@@ -173,7 +264,16 @@ jobs:
             }
             console.log('Pool ids for sidecar prune:', poolIds.size);
             const queuePath = path.join(DATA_DIR, 'wd-desc-queue.jsonl');
-            if (!fs.existsSync(queuePath)) { console.log('No WD queue — skipping WD backfill'); return; }
+            const WD_GATE = `/tmp/wd-gate-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}.json`;
+            if (!fs.existsSync(queuePath)) {
+              // AGG-WD-SIDECAR-CLOBBER-FIX-1: a skipped WD fetch writes the gate log so
+              // the verify step can distinguish "nothing written, nothing at risk" from
+              // "fetch crashed before reporting" (missing log = fail-closed). Run-scoped
+              // filename: a reused runner's leftover state is never read (Adversary C2).
+              console.log('No WD queue — skipping WD backfill');
+              fs.writeFileSync(WD_GATE, JSON.stringify({ skipped: 'no_queue', run_id: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT, ts: new Date().toISOString() }));
+              return;
+            }
             const queueLines = fs.readFileSync(queuePath, 'utf8').trim().split('\n').filter(Boolean);
             const wdJobs = queueLines.map(line => {
               const q = JSON.parse(line);
@@ -181,11 +281,14 @@ jobs:
             });
             console.log('WD queue:', wdJobs.length, 'jobs pending');
             const start = Date.now();
-            const desc = await fetchWorkdayDescriptions(wdJobs, DATA_DIR, { poolIds });
+            const desc = await fetchWorkdayDescriptions(wdJobs, DATA_DIR, { poolIds, gateLogPath: WD_GATE });
             console.log('WD done:', desc.size, 'cached (' + Math.round((Date.now()-start)/1000) + 's)');
           }
           main().catch(e => { console.error('WD error:', e.message); process.exitCode = 1; });
           "
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
 
 
       - name: Fetch SR descriptions
@@ -222,21 +325,66 @@ jobs:
           main().catch(e => { console.error('SR error:', e.message); process.exitCode = 1; });
           "
 
-      - name: "Verify sidecar integrity (AGG-SIDECAR-ATOMIC-WRITE-1 + AGG-WD-SIDECAR-LIFECYCLE-1)"
+      - name: "Verify sidecar integrity — ratio gate (AGG-WD-SIDECAR-CLOBBER-FIX-1 L1)"
+        # Replaces the old absolute-only floor (<500 lines, AGG-SIDECAR-ATOMIC-WRITE-1
+        # era) that passed an 8/9-chunk partial seed at ~57K lines. The gate now rides
+        # the structured log the library writes every run (fetch / idle / skipped):
+        #   ratio = final_entries / (seed_entries - pruned)  >= 0.95
+        #   final_entries >= absolute floor
+        # Denominator = same-run seed adjusted for LOGGED prunes (writeSidecarCompacted
+        # logs every pool eviction; the gate log carries the count). Fetched entries only
+        # ever ADD, so shrinkage beyond logged prunes is the clobber signature. Gate
+        # failure = exit-nonzero (run fails; upload step is skipped via success()) AND
+        # the completion marker flips to failed — check-47 producer liveness + the
+        # pipeline-alert run then page. A stall must be loud.
         run: |
-          # (descriptions-workday-1..N.jsonl) — sum lines across all WD files.
-          WD_LINES=$(cat .github/data/descriptions-workday*.jsonl 2>/dev/null | wc -l)
-          if [ "$WD_LINES" -lt 500 ]; then
-            echo "⚠️ WD sidecar has only $WD_LINES lines (expected 5000+). Possible seed-download failure."
-            echo "Skipping upload to prevent data loss — existing Storage sidecar preserved."
-            echo "SKIP_UPLOAD=true" >> $GITHUB_ENV
-          else
-            echo "✅ WD sidecar OK: $WD_LINES lines"
-          fi
+          node -e "
+          const fs = require('fs');
+          async function main() {
+            const RATIO_FLOOR = 0.95;  // an 8/9-chunk partial seed = 0.889 must fail; healthy runs sit >= 0.99
+            const ABS_FLOOR = 10000;   // measured steady state ~66K entries; floor catches multi-run ratchet drift
+            const read = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (_) { return null; } };
+            const gate = read(`/tmp/wd-gate-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}.json`);
+            const seedInfo = read(`/tmp/desc-gate-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}.json`);
+            if (!gate) {
+              console.error('::error::[CLOBBER-GATE] missing WD gate log — fetch step crashed before reporting (fail-closed; run already failing).');
+              process.exit(1);
+            }
+            if (gate.skipped) {
+              console.log('WD fetch skipped (' + gate.skipped + ') — nothing fetched, nothing rewritten, nothing to upload; gate passes trivially.');
+              return;
+            }
+            const seedEntries = gate.seed_entries;
+            const finalEntries = gate.final_entries;
+            const pruned = gate.pruned || 0;
+            const seedMode = seedInfo ? seedInfo.seed_mode : 'unknown';
+            if (seedEntries === 0 && seedMode === 'bootstrap') {
+              // Explicit seed-establishment path: a legitimately empty / first-run layout
+              // must not lock the pipeline out. The fetch seeds from scratch; log loudly.
+              console.log('::warning::[BOOTSTRAP] legit-empty seed (no single, no chunk-1 in R2) — seed-establishment run, gate passes loudly. final_entries=' + finalEntries + ', fetched=' + gate.fetched);
+              return;
+            }
+            const denominator = Math.max(seedEntries - pruned, 1);
+            const ratio = finalEntries / denominator;
+            const failures = [];
+            if (ratio < RATIO_FLOOR) failures.push('ratio ' + ratio.toFixed(4) + ' < ' + RATIO_FLOOR + ' — final ' + finalEntries + ' vs prune-adjusted seed ' + denominator + ' (seed ' + seedEntries + ' - pruned ' + pruned + ', seed_mode ' + seedMode + ')');
+            if (finalEntries < ABS_FLOOR) failures.push('final_entries ' + finalEntries + ' < absolute floor ' + ABS_FLOOR + ' — gross sidecar loss');
+            if (failures.length > 0) {
+              console.error('::error::[CLOBBER-GATE] WD sidecar shrinkage not explained by logged prunes — UPLOAD BLOCKED. ' + failures.join(' | ') + ' | gate_log=' + JSON.stringify(gate));
+              process.exit(1);
+            }
+            console.log('✅ WD sidecar ratio gate OK: final ' + finalEntries + ' vs prune-adjusted seed ' + denominator + ' (ratio ' + ratio.toFixed(4) + ' >= ' + RATIO_FLOOR + ', absolute floor ' + ABS_FLOOR + ', seed_mode ' + seedMode + ')');
+            fs.writeFileSync(`/tmp/wd-gate-result-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}.json`, JSON.stringify({ ratio, final_entries: finalEntries, seed_entries: seedEntries, pruned, seed_mode: seedMode, ts: new Date().toISOString() }));
+          }
+          main().catch(e => { console.error('::error::[CLOBBER-GATE] ' + e.message); process.exit(1); });
+          "
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
 
       - name: "Upload sidecars to Supabase Storage"
         id: upload
-        if: success() && env.SKIP_UPLOAD != 'true'
+        if: success()
         continue-on-error: true
         run: node .github/scripts/upload-to-storage.js --bucket pipeline-data --data-dir .github/data --include-wd-sr
         env:
@@ -248,7 +396,7 @@ jobs:
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
 
       - name: "Prune superseded R2 sidecar objects (AGG-WD-SIDECAR-LIFECYCLE-1)"
-        if: success() && env.SKIP_UPLOAD != 'true' && steps.upload.outcome == 'success'
+        if: success() && steps.upload.outcome == 'success'
         continue-on-error: true
         run: |
           node -e "
@@ -288,7 +436,7 @@ jobs:
         if: always()
         run: |
           STATUS=complete
-          if [ "${{ steps.upload.outcome }}" != "success" ] || [ "${SKIP_UPLOAD:-}" = "true" ]; then STATUS=failed; fi
+          if [ "${{ steps.upload.outcome }}" != "success" ]; then STATUS=failed; fi
           WD_LINES=$(cat .github/data/descriptions-workday*.jsonl 2>/dev/null | wc -l)
           SR_LINES=$(wc -l < .github/data/descriptions-smartrecruiters.jsonl 2>/dev/null || echo 0)
           COMPLETED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -325,6 +473,28 @@ jobs:
           }
           addStageTimings().catch((err) => console.log('stage timings: skipped (' + err.message + ') - non-fatal'));
           EOF
+          node <<'EOF'
+          // AGG-WD-SIDECAR-CLOBBER-FIX-1: fold the ratio-gate evidence into the
+          // completion marker (additive fields only, same pattern as stage timings).
+          // The alert feed / falsifier window reads sidecar_gate straight off the
+          // marker: {seed_entries, final_entries, pruned, fetched, failed, ratio}.
+          async function addGateEvidence() {
+            const fs = require('fs');
+            const marker = JSON.parse(fs.readFileSync('/tmp/desc-backfill-complete.json', 'utf8'));
+            const tag = `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
+            const gate = (() => { try { return JSON.parse(fs.readFileSync(`/tmp/wd-gate-${tag}.json`, 'utf8')); } catch (_) { return null; } })();
+            const result = (() => { try { return JSON.parse(fs.readFileSync(`/tmp/wd-gate-result-${tag}.json`, 'utf8')); } catch (_) { return null; } })();
+            const seedInfo = (() => { try { return JSON.parse(fs.readFileSync(`/tmp/desc-gate-${tag}.json`, 'utf8')); } catch (_) { return null; } })();
+            marker.sidecar_gate = {
+              seed_mode: seedInfo ? seedInfo.seed_mode : null,
+              gate: gate || null,
+              gate_result: result || null,
+            };
+            fs.writeFileSync('/tmp/desc-backfill-complete.json', JSON.stringify(marker), 'utf8');
+            console.log('sidecar gate evidence: folded into marker' + (result ? ' (ratio ' + result.ratio.toFixed(4) + ')' : gate && gate.skipped ? ' (skipped: ' + gate.skipped + ')' : ' (gate log absent — run failed before the gate)'));
+          }
+          addGateEvidence().catch((err) => console.log('sidecar gate evidence: skipped (' + err.message + ') - non-fatal'));
+          EOF
           # Storage backup second, bounded retry, non-fatal.
           node <<'EOF'
           const fs = require('fs');
@@ -353,6 +523,8 @@ jobs:
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
           GITHUB_TOKEN: ${{ github.token }}
           JOB_ID: ${{ github.job }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
 
       # marker at in_progress forever (cancellation skips the completion write), so the
       # enrich gate burned its 7m+3m wait caps polling a zombie (C248 livelock). This
@@ -387,3 +559,26 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+
+      - name: "Release sidecar write lock (AGG-WD-SIDECAR-CLOBBER-FIX-1 L2)"
+        # Runs on success, failure AND cancellation (if: always()). Owner-checked:
+        # a run whose lock was TTL-taken-over by a successor never deletes it. If this
+        # step itself is skipped/crashes, the TTL + stale-owner takeover is the
+        # correctness backstop (bounded 15min staleness, never a wedge).
+        if: always()
+        run: |
+          node -e "
+          const { createR2Client } = require('./.github/scripts/aggregator/lib/storage/r2-client');
+          async function main() {
+            const r2 = createR2Client({ prefix: 'data/' });
+            const r = await r2.releaseLock('locks/desc-backfill.lock', { owner: String(process.env.GITHUB_RUN_ID) });
+            console.log('Sidecar write lock release: ' + JSON.stringify(r));
+          }
+          main().catch(err => { console.error('lock release failed (non-fatal, TTL takeover backstops): ' + err.message); });
+          "
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
