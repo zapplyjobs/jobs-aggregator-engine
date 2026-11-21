@@ -169,6 +169,12 @@ jobs:
             // behavior (a failed pool seed = no prune, no queue, safe no-op paths).
             await dl('all_jobs.json', '.github/data/all_jobs.json');
             await dl('wd-desc-queue.jsonl', '.github/data/wd-desc-queue.jsonl');
+            // Adversary AM-1: truncate BEFORE any sidecar seeding. The single-file path
+            // is safe anyway (strict download renames over dest), but the chunks path
+            // appends — a prior aborted run's half-concat must never survive onto a
+            // reused runner's workspace (C2 symmetry for workspace state). If the seed
+            // aborts after this line, the run is already failing and nothing uploads.
+            fs.writeFileSync('.github/data/descriptions-workday.jsonl', '');
             // AGG-WD-SIDECAR-CLOBBER-FIX-1 (L1): the sidecar seed path is STRICT.
             // downloadToFileStrict returns null ONLY on NoSuchKey/404 (genuinely
             // absent); any transport failure THROWS and aborts this run BEFORE the
@@ -386,6 +392,11 @@ jobs:
         id: upload
         if: success()
         continue-on-error: true
+        # Adversary AM-2 — ruled DOCUMENTED RESIDUAL (lead disposition 2026-11-21):
+        # run liveness stays blind to upload-failure streaks under continue-on-error;
+        # liveness coverage = check-47/48 at hours scale; consumer-facing harm is
+        # guarded by the falsifier window; follow-up = streak-aware run status,
+        # riding the OPS diet pass (with A7's SR-parity row).
         run: node .github/scripts/upload-to-storage.js --bucket pipeline-data --data-dir .github/data --include-wd-sr
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
