@@ -2,6 +2,22 @@ name: Supplemental Ingest 2
 
 on:
   workflow_dispatch:
+    # A348 dose-ladder (AM-10): dose runs dispatch THIS workflow from the
+    # agg-jazzhr-feed-path branch; inputs override the env pair below. No new
+    # workflow file; the hourly cron on main ignores inputs (defaults).
+    inputs:
+      detail_pacing_ms:
+        description: 'Dose-run detail pacing override (ms); empty = env default'
+        required: false
+        default: ''
+      detail_budget:
+        description: 'Dose-run detail budget override; empty = env default (0 = zero detail fetches, P0 class)'
+        required: false
+        default: ''
+      control_url:
+        description: 'AM-9 single-shot control URL (judgment-only run: no state/artifact writes, no uploads)'
+        required: false
+        default: ''
   schedule:
     - cron: '41 * * * *'
 concurrency:
@@ -21,8 +37,9 @@ jobs:
       NODE_OPTIONS: --max-old-space-size=4096
       # class measured 2026-10-10); 70s x 10 fits the 15-min timeout. Producer
       # together when retuning.
-      JAZZHR_DETAIL_PACING_MS: '70000'
-      JAZZHR_DETAIL_BUDGET: '10'
+      JAZZHR_DETAIL_PACING_MS: ${{ github.event.inputs.detail_pacing_ms || '70000' }}
+      JAZZHR_DETAIL_BUDGET: ${{ github.event.inputs.detail_budget || '10' }}
+      JAZZHR_CONTROL_URL: ${{ github.event.inputs.control_url || '' }}
 
     steps:
       - name: Checkout repository
