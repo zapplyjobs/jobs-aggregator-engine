@@ -99,7 +99,9 @@ jobs:
               // agg-snapshot-gate.js:47 accepts only complete|in_progress|failed).
               const fs = require('fs');
               try {
-                fs.writeFileSync(`/tmp/wd-gate-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}.json`,
+                // Adversary AM-1 era fix / workflow-js-lint: NO BACKTICKS in a double-quoted
+                // node -e script — bash would command-substitute them before node parses.
+                fs.writeFileSync('/tmp/wd-gate-' + process.env.GITHUB_RUN_ID + '-' + process.env.GITHUB_RUN_ATTEMPT + '.json',
                   JSON.stringify({ skipped: 'lock_held', holder: res.holder, expires_at: res.expires_at, run_id: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT, ts: new Date().toISOString() }));
               } catch (_) { /* marker fold tolerates absence */ }
               console.error('::error::[LOCK-HELD] desc-backfill lock held by ' + res.holder + ' until ' + res.expires_at + ' — this tick skips (single-flight, AGG-WD-SIDECAR-CLOBBER-FIX-1). Persistent hold trips check-47 producer liveness.');
@@ -270,7 +272,8 @@ jobs:
             }
             console.log('Pool ids for sidecar prune:', poolIds.size);
             const queuePath = path.join(DATA_DIR, 'wd-desc-queue.jsonl');
-            const WD_GATE = `/tmp/wd-gate-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}.json`;
+            // workflow-js-lint: string concat, never backticks, inside node -e double quotes.
+            const WD_GATE = '/tmp/wd-gate-' + process.env.GITHUB_RUN_ID + '-' + process.env.GITHUB_RUN_ATTEMPT + '.json';
             if (!fs.existsSync(queuePath)) {
               // AGG-WD-SIDECAR-CLOBBER-FIX-1: a skipped WD fetch writes the gate log so
               // the verify step can distinguish "nothing written, nothing at risk" from
@@ -350,8 +353,10 @@ jobs:
             const RATIO_FLOOR = 0.95;  // an 8/9-chunk partial seed = 0.889 must fail; healthy runs sit >= 0.99
             const ABS_FLOOR = 10000;   // measured steady state ~66K entries; floor catches multi-run ratchet drift
             const read = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (_) { return null; } };
-            const gate = read(`/tmp/wd-gate-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}.json`);
-            const seedInfo = read(`/tmp/desc-gate-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}.json`);
+            // workflow-js-lint: string concat, never backticks, inside node -e double quotes.
+            const tag = process.env.GITHUB_RUN_ID + '-' + process.env.GITHUB_RUN_ATTEMPT;
+            const gate = read('/tmp/wd-gate-' + tag + '.json');
+            const seedInfo = read('/tmp/desc-gate-' + tag + '.json');
             if (!gate) {
               console.error('::error::[CLOBBER-GATE] missing WD gate log — fetch step crashed before reporting (fail-closed; run already failing).');
               process.exit(1);
@@ -380,7 +385,7 @@ jobs:
               process.exit(1);
             }
             console.log('✅ WD sidecar ratio gate OK: final ' + finalEntries + ' vs prune-adjusted seed ' + denominator + ' (ratio ' + ratio.toFixed(4) + ' >= ' + RATIO_FLOOR + ', absolute floor ' + ABS_FLOOR + ', seed_mode ' + seedMode + ')');
-            fs.writeFileSync(`/tmp/wd-gate-result-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}.json`, JSON.stringify({ ratio, final_entries: finalEntries, seed_entries: seedEntries, pruned, seed_mode: seedMode, ts: new Date().toISOString() }));
+            fs.writeFileSync('/tmp/wd-gate-result-' + process.env.GITHUB_RUN_ID + '-' + process.env.GITHUB_RUN_ATTEMPT + '.json', JSON.stringify({ ratio, final_entries: finalEntries, seed_entries: seedEntries, pruned, seed_mode: seedMode, ts: new Date().toISOString() }));
           }
           main().catch(e => { console.error('::error::[CLOBBER-GATE] ' + e.message); process.exit(1); });
           "
