@@ -35,9 +35,9 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       NODE_OPTIONS: --max-old-space-size=4096
-      # class measured 2026-10-10); 70s x 10 fits the 15-min timeout. Producer
-      # together when retuning.
-      JAZZHR_DETAIL_PACING_MS: ${{ github.event.inputs.detail_pacing_ms || '70000' }}
+      # A348 cutover 2026-11-22 (operator GO): 2.5s x 10 = ~25s detail phase
+      # (R2-measured 2,577ms/detail); healthy_yield detector + 7d watch govern.
+      JAZZHR_DETAIL_PACING_MS: ${{ github.event.inputs.detail_pacing_ms || '2500' }}
       JAZZHR_DETAIL_BUDGET: ${{ github.event.inputs.detail_budget || '10' }}
       JAZZHR_CONTROL_URL: ${{ github.event.inputs.control_url || '' }}
 
