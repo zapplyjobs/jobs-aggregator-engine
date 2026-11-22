@@ -35,10 +35,12 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       NODE_OPTIONS: --max-old-space-size=4096
-      # A348 cutover 2026-11-22 (operator GO): 2.5s x 10 = ~25s detail phase
-      # (R2-measured 2,577ms/detail); healthy_yield detector + 7d watch govern.
+      # A348 cutover 2026-11-22 + pre-authorized halving same-day: healthy_yield_low
+      # fired 3-consecutive at 03:43Z (22 consecutive LOWs by 22:43Z, 1/5 plateau);
+      # budget 10 -> 5 per the degradation rule (env-only, rollback-class;
+      # pacing stays 2500 - R2-measured 2,577ms/detail).
       JAZZHR_DETAIL_PACING_MS: ${{ github.event.inputs.detail_pacing_ms || '2500' }}
-      JAZZHR_DETAIL_BUDGET: ${{ github.event.inputs.detail_budget || '10' }}
+      JAZZHR_DETAIL_BUDGET: ${{ github.event.inputs.detail_budget || '5' }}
       JAZZHR_CONTROL_URL: ${{ github.event.inputs.control_url || '' }}
 
     steps:
