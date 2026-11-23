@@ -19,6 +19,19 @@ name: Board Coverage Capture
 
 on:
   workflow_dispatch: # manual operator tool: on-demand capture (e.g. post-lane-landing verification)
+    # AGG-BOARDCOV-PAUSEMARK-1: declare an intentional pause so the artifact carries the
+    # machine-readable marker (check-90 landing word condition (b)); empty = no pause.
+    inputs:
+      pause_until:
+        description: 'Pause marker paused_until (RFC3339 Z, e.g. 2026-11-24T00:00:00Z); empty = no active pause'
+        required: false
+        default: ''
+        type: string
+      pause_reason:
+        description: 'Pause marker pause_reason (required when pause_until is set)'
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: board-coverage
@@ -132,6 +145,8 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          BOARD_COVERAGE_PAUSE_UNTIL: ${{ inputs.pause_until || '' }}
+          BOARD_COVERAGE_PAUSE_REASON: ${{ inputs.pause_reason || '' }}
         run: |
           node .github/scripts/build-board-coverage.js --csv company-research-log.csv
 

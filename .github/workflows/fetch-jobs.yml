@@ -243,7 +243,6 @@ jobs:
     - name: "Fetch jobs from all sources"
       run: set -o pipefail; node .github/scripts/index.js 2>&1 | tee .github/logs/fetch.log
       env:
-        JSEARCH_API_KEY: ${{ secrets.JSEARCH_API_KEY }}
         # AGG-B2: engine cap pinned to the yml timeout so the two constants cannot
         # drift (consensus hardening); the drill input overrides it deliberately.
         DEADLINE_CAP_MIN: ${{ github.event.inputs.deadline_cap_min || '20' }}
